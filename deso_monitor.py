@@ -50,9 +50,9 @@ measurements = {node: [] for node in NODES}
 def post_measurement(node, parent_post_hash):
     logging.info(f"🔄 DesoMonitor: Starting measurement post to {node}")
     start = time.time()
+    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    
     try:
-        timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        
         logging.info(f"📡 Connecting to {node}...")
         client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)
         
@@ -76,42 +76,46 @@ def post_measurement(node, parent_post_hash):
         txn_hash = submit_resp.get("TxnHashHex")
         
         logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash[:8]}...)")
-        # Wait for commitment (confirmed reply) - increased timeout for slow networks
-        try:
-            client.wait_for_commitment_with_timeout(txn_hash, 120.0)  # Increased to 2 minutes
-            elapsed = time.time() - start
-            
-            # Now post the actual measurement with real timing as a reply
-            final_comment = f"\U0001F310 Node check-in RESULT\nElapsed: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
-            
-            logging.info(f"📝 Posting final result: {elapsed:.2f}s...")
-            final_resp = client.submit_post(
-                updater_public_key_base58check=PUBLIC_KEY,
-                body=final_comment,
-                parent_post_hash_hex=parent_post_hash,  # Reply to main thread
-                title="",
-                image_urls=[],
-                video_urls=[],
-                post_extra_data={"Node": node, "Type": "measurement_result"},
-                min_fee_rate_nanos_per_kb=1000,
-                is_hidden=False,
-                in_tutorial=False
-            )
-            client.sign_and_submit_txn(final_resp)
-            
-            logging.info(f"✅ SUCCESS: {node} responded in {elapsed:.2f} seconds")
-            print(final_comment)
-            measurements[node].append((timestamp, elapsed))
-        except Exception as confirm_err:
-            elapsed = time.time() - start
-            logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
-            print(f"Reply txn not confirmed for {node}: {confirm_err}")
-            measurements[node].append((timestamp, None))
+        
     except Exception as e:
         elapsed = time.time() - start
         logging.error(f"❌ ERROR: Failed to post to {node} after {elapsed:.2f}s: {e}")
         print(f"Error posting to {node}: {e}")
-        measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
+        measurements[node].append((timestamp, None))
+        return
+    
+    # Try to wait for commitment - early return on failure
+    try:
+        client.wait_for_commitment_with_timeout(txn_hash, 120.0)
+    except Exception as confirm_err:
+        elapsed = time.time() - start
+        logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
+        print(f"Reply txn not confirmed for {node}: {confirm_err}")
+        measurements[node].append((timestamp, None))
+        return
+    
+    # Success path - no nesting needed
+    elapsed = time.time() - start
+    final_comment = f"\U0001F310 Node check-in RESULT\nElapsed: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
+    
+    logging.info(f"📝 Posting final result: {elapsed:.2f}s...")
+    final_resp = client.submit_post(
+        updater_public_key_base58check=PUBLIC_KEY,
+        body=final_comment,
+        parent_post_hash_hex=parent_post_hash,
+        title="",
+        image_urls=[],
+        video_urls=[],
+        post_extra_data={"Node": node, "Type": "measurement_result"},
+        min_fee_rate_nanos_per_kb=1000,
+        is_hidden=False,
+        in_tutorial=False
+    )
+    client.sign_and_submit_txn(final_resp)
+    
+    logging.info(f"✅ SUCCESS: {node} responded in {elapsed:.2f} seconds")
+    print(final_comment)
+    measurements[node].append((timestamp, elapsed))
 
 def scheduled_measurements(parent_post_hash):
     logging.info(f"🚀 DesoMonitor: Starting scheduled measurements every {SCHEDULE_INTERVAL} seconds")
