@@ -7,8 +7,7 @@ import os
 import sys
 from dotenv import load_dotenv
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'deso-sdk-fork'))
-
+# Use the main deso_sdk.py in current directory
 from deso_sdk import DeSoDexClient
 
 def test_image_upload():
