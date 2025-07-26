@@ -236,7 +236,7 @@ class DeSoDexClient:
         
         try:
             with open(image_path, 'rb') as image_file:
-                files = {'file': image_file}
+                files = {'image': image_file}
                 headers = {'Origin': self.node_url}
                 
                 response = requests.post(url, files=files, headers=headers)
