@@ -260,16 +260,38 @@ def daily_post():
     logging.info("📋 DesoMonitor: Starting daily summary post creation...")
     generate_daily_graph()
     generate_gauge()
+    
+    # Upload images to DeSo
+    image_urls = []
+    try:
+        logging.info("📤 Uploading performance graph to DeSo...")
+        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])
+        
+        # Upload daily performance graph
+        if os.path.exists('daily_performance.png'):
+            perf_url = client.upload_image('daily_performance.png')
+            image_urls.append(perf_url)
+            logging.info(f"✅ Performance graph uploaded: {perf_url}")
+        
+        # Upload daily gauge
+        if os.path.exists('daily_gauge.png'):
+            gauge_url = client.upload_image('daily_gauge.png')
+            image_urls.append(gauge_url)
+            logging.info(f"✅ Gauge chart uploaded: {gauge_url}")
+            
+    except Exception as e:
+        logging.error(f"⚠️ Error uploading images: {e}")
+        # Continue with post creation even if image upload fails
+    
     body = f"\U0001F4C8 Daily Node Performance Summary\n{POST_TAG}"
     try:
         logging.info("📤 Posting daily summary to DeSo...")
-        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])
         post_resp = client.submit_post(
             updater_public_key_base58check=PUBLIC_KEY,
             body=body,
             parent_post_hash_hex=None,
             title="",
-            image_urls=[],
+            image_urls=image_urls,
             video_urls=[],
             post_extra_data={"Node": NODES[0]},
             min_fee_rate_nanos_per_kb=1000,

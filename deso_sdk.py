@@ -219,6 +219,44 @@ class DeSoDexClient:
 
         return response_data
 
+    def upload_image(self, image_path: str) -> str:
+        """
+        Upload an image to DeSo and return the image URL.
+
+        Args:
+            image_path (str): Path to the image file to upload.
+
+        Returns:
+            str: The URL where the uploaded image can be accessed.
+
+        Raises:
+            Exception: If the upload fails or the response cannot be parsed.
+        """
+        url = f"{self.node_url}/api/v0/upload-image"
+        
+        try:
+            with open(image_path, 'rb') as image_file:
+                files = {'file': image_file}
+                headers = {'Origin': self.node_url}
+                
+                response = requests.post(url, files=files, headers=headers)
+                response.raise_for_status()
+                
+                response_data = response.json()
+                image_url = response_data.get('ImageURL')
+                
+                if not image_url:
+                    raise Exception("ImageURL not found in response")
+                
+                return image_url
+                
+        except FileNotFoundError:
+            raise Exception(f"Image file not found: {image_path}")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Upload request failed: {str(e)}")
+        except json.JSONDecodeError as e:
+            raise Exception(f"Error parsing upload response: {str(e)}")
+
     def get_transaction(self, txn_hash_hex: str, committed_txns_only: bool) -> Dict[str, Any]:
         """
         Fetch a transaction by its hash with an optional filter for committed transactions.
