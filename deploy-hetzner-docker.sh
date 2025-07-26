@@ -50,8 +50,6 @@ echo "🚀 Starting enhanced DesoMonitor container..."
 docker run -d \
     --name desomonitor \
     --restart unless-stopped \
-    -e DESO_PUBLIC_KEY="$DESO_PUBLIC_KEY" \
-    -e DESO_SEED_HEX="$DESO_SEED_HEX" \
     -v /home/carry/DesoMonitor/data:/app/data \
     desomonitor:latest
 
