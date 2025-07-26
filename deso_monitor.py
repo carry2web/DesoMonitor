@@ -114,7 +114,7 @@ def post_measurement(node, parent_post_hash):
             title="",
             image_urls=[],
             video_urls=[],
-            post_extra_data={"Node": node, "Type": "measurement_result", "PostTime": post_elapsed, "ConfirmTime": confirm_elapsed},
+            post_extra_data={"Node": node, "Type": "measurement_result", "PostTime": f"{post_elapsed:.2f}", "ConfirmTime": f"{confirm_elapsed:.2f}"},
             min_fee_rate_nanos_per_kb=1000,
             is_hidden=False,
             in_tutorial=False
