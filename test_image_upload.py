@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test image upload with the fixed DeSo SDK
+Test image upload with the JWT-enabled DeSo SDK
 """
 
 import os
@@ -17,6 +17,7 @@ def test_image_upload():
     # Load environment variables
     load_dotenv()
     SEED_HEX = os.getenv("DESO_SEED_HEX").replace('"','').replace("'","").strip()
+    PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY").replace('"','').replace("'","").strip()
     
     # Initialize DeSo SDK
     deso = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url="https://node.deso.org")
@@ -31,7 +32,7 @@ def test_image_upload():
         if os.path.exists(image_file):
             print(f"\nTesting upload of {image_file}...")
             try:
-                image_url = deso.upload_image(image_file)
+                image_url = deso.upload_image(image_file, PUBLIC_KEY)
                 print(f"✅ SUCCESS: {image_file} uploaded successfully!")
                 print(f"   Image URL: {image_url}")
                 

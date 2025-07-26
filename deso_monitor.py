@@ -269,13 +269,13 @@ def daily_post():
         
         # Upload daily performance graph
         if os.path.exists('daily_performance.png'):
-            perf_url = client.upload_image('daily_performance.png')
+            perf_url = client.upload_image('daily_performance.png', PUBLIC_KEY)
             image_urls.append(perf_url)
             logging.info(f"✅ Performance graph uploaded: {perf_url}")
         
         # Upload daily gauge
         if os.path.exists('daily_gauge.png'):
-            gauge_url = client.upload_image('daily_gauge.png')
+            gauge_url = client.upload_image('daily_gauge.png', PUBLIC_KEY)
             image_urls.append(gauge_url)
             logging.info(f"✅ Gauge chart uploaded: {gauge_url}")
             
