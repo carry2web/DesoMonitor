@@ -24,12 +24,12 @@ echo "🔄 Updating DesoMonitor on Hetzner server..."
 
 # Stop and remove existing container
 echo "🛑 Stopping existing DesoMonitor container..."
-sudo docker stop desomonitor || echo "Container not running"
-sudo docker rm desomonitor || echo "Container not found"
+docker stop desomonitor 2>/dev/null || echo "Container not running"
+docker rm desomonitor 2>/dev/null || echo "Container not found"
 
 # Remove old image
 echo "🗑️ Removing old Docker image..."
-sudo docker rmi desomonitor:latest || echo "Image not found"
+docker rmi desomonitor:latest 2>/dev/null || echo "Image not found"
 
 # Clone/update repository
 echo "📥 Fetching latest code from GitHub..."
@@ -43,11 +43,11 @@ fi
 
 # Build new Docker image
 echo "🏗️ Building new Docker image with dual-metric monitoring..."
-sudo docker build -t desomonitor:latest .
+docker build -t desomonitor:latest .
 
 # Run new container with enhanced monitoring
 echo "🚀 Starting enhanced DesoMonitor container..."
-sudo docker run -d \
+docker run -d \
     --name desomonitor \
     --restart unless-stopped \
     -e DESO_PUBLIC_KEY="$DESO_PUBLIC_KEY" \
@@ -58,10 +58,10 @@ sudo docker run -d \
 # Check if container is running
 echo "✅ Checking container status..."
 sleep 5
-sudo docker ps | grep desomonitor
+docker ps | grep desomonitor
 
 echo "📊 Container logs (last 20 lines):"
-sudo docker logs --tail 20 desomonitor
+docker logs --tail 20 desomonitor
 
 echo "🎉 Enhanced DesoMonitor deployment complete!"
 echo "📈 New features:"
@@ -69,8 +69,8 @@ echo "   - Dual-metric monitoring (POST vs CONFIRMATION speed)"
 echo "   - Enhanced visualization with horizontal bar charts"
 echo "   - Improved error handling and code readability"
 echo ""
-echo "🔍 Monitor logs with: sudo docker logs -f desomonitor"
-echo "📊 Check status with: sudo docker ps | grep desomonitor"
+echo "🔍 Monitor logs with: docker logs -f desomonitor"
+echo "📊 Check status with: docker ps | grep desomonitor"
 
 ENDSSH
 
@@ -84,5 +84,5 @@ echo "   ✓ Community feedback integration"
 echo ""
 echo "📱 Monitor the enhanced system:"
 echo "   • SSH: ssh -p $SSH_PORT $SSH_USER@$SERVER_IP"
-echo "   • Logs: sudo docker logs -f desomonitor" 
-echo "   • Status: sudo docker ps | grep desomonitor"
+echo "   • Logs: docker logs -f desomonitor" 
+echo "   • Status: docker ps | grep desomonitor"

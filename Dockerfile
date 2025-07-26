@@ -1,31 +1,34 @@
+# Use Python 3.11 slim image
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
-    curl \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
-COPY *.py .
-COPY *.md .
+# Copy application code
+COPY deso_monitor.py .
+COPY deso_sdk.py .
 
-# Create directory for logs and graphs
+# Create data directory
 RUN mkdir -p /app/data
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONIOENCODING=utf-8
+ENV MATPLOTLIB_BACKEND=Agg
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import os; exit(0 if os.path.exists('desomonitor.log') else 1)"
+# Expose port (if needed for future web interface)
+EXPOSE 8000
 
-# Run the monitor
+# Run the DesoMonitor
 CMD ["python", "deso_monitor.py"]
