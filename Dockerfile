@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY deso_monitor.py .
 COPY deso_sdk.py .
+COPY node_manager.py .
+COPY nodes_config.json .
 COPY .env .
 
 # Create data directory
