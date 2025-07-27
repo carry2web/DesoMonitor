@@ -6,6 +6,7 @@ import os
 import logging
 from dotenv import load_dotenv
 from deso_sdk import DeSoDexClient
+from node_manager import NodeManager
 
 # Setup logging with UTF-8 encoding
 import sys
@@ -29,12 +30,7 @@ logging.basicConfig(
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 
-# Configuration - Verified nodes with TxIndex enabled
-NODES = [
-    "https://node.deso.org",  # Main DeSo node - confirmed TxIndex enabled
-    "https://desocialworld.desovalidator.net",  # Validator with public API - confirmed TxIndex enabled
-    "https://safetynet.social"  # SafetyNet node - confirmed working
-]
+# Configuration
 SCHEDULE_INTERVAL = 600  # seconds
 DAILY_POST_TIME = "00:00"  # UTC time for daily summary post
 POST_TAG = "#desomonitormeasurement"
@@ -43,11 +39,32 @@ load_dotenv()
 PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY").replace('"','').replace("'","").strip()
 SEED_HEX = os.getenv("DESO_SEED_HEX").replace('"','').replace("'","").strip()
 
+# Initialize node manager
+node_manager = NodeManager()
+NODES = node_manager.get_active_nodes()
+
+logging.info(f"📊 Loaded {len(NODES)} active nodes from configuration:")
+for i, node in enumerate(NODES, 1):
+    node_info = node_manager.get_node_info(node)
+    name = node_info.get("name", "Unknown") if node_info else "Unknown"
+    logging.info(f"   {i}. {name}: {node}")
+
 # Data storage - now tracking both post speed and confirmation speed
 measurements = {node: [] for node in NODES}
 
+# Global variable to track current daily post hash
+current_parent_post_hash = None
 
-def post_measurement(node, parent_post_hash):
+
+def post_measurement(node, parent_post_hash=None):
+    """
+    Measure POST speed and CONFIRMATION speed for a DeSo node
+    """
+    global current_parent_post_hash
+    
+    # Use global parent post hash if not provided
+    if parent_post_hash is None:
+        parent_post_hash = current_parent_post_hash
     logging.info(f"🔄 DesoMonitor: Starting dual measurement for {node}")
     start_total = time.time()
     timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -129,7 +146,12 @@ def post_measurement(node, parent_post_hash):
         logging.warning(f"⚠️ Result post failed, but measurements recorded: {result_err}")
         measurements[node].append((timestamp, post_elapsed, confirm_elapsed, "Result post failed"))
 
-def scheduled_measurements(parent_post_hash):
+def scheduled_measurements():
+    """
+    Run measurements continuously using the current global parent post hash
+    """
+    global current_parent_post_hash
+    
     logging.info(f"🚀 DesoMonitor: Starting scheduled measurements every {SCHEDULE_INTERVAL} seconds")
     measurement_count = 0
     while True:
@@ -138,7 +160,7 @@ def scheduled_measurements(parent_post_hash):
         
         for i, node in enumerate(NODES, 1):
             logging.info(f"🔍 DesoMonitor: Processing node {i}/{len(NODES)}: {node}")
-            post_measurement(node, parent_post_hash)
+            post_measurement(node)  # Will use current_parent_post_hash automatically
         
         next_run = datetime.datetime.utcnow() + datetime.timedelta(seconds=SCHEDULE_INTERVAL)
         logging.info(f"💤 DesoMonitor: Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
@@ -309,15 +331,17 @@ def daily_post():
         return None
 
 def daily_scheduler():
+    global current_parent_post_hash
+    
     logging.info("📅 DesoMonitor: Daily scheduler started")
     
     # Start measurements immediately with a temporary parent post
     logging.info("🚀 Creating initial daily post...")
-    parent_post_hash = daily_post()
+    current_parent_post_hash = daily_post()
     
-    if parent_post_hash:
-        logging.info("🔄 Starting initial measurements thread...")
-        threading.Thread(target=scheduled_measurements, args=(parent_post_hash,), daemon=True).start()
+    if current_parent_post_hash:
+        logging.info("🔄 Starting measurements thread...")
+        threading.Thread(target=scheduled_measurements, daemon=True).start()
     
     while True:
         now = datetime.datetime.utcnow()
@@ -332,11 +356,12 @@ def daily_scheduler():
         
         time.sleep(sleep_time)
         
-        # Create new daily post with accumulated data
+        # Create new daily post with accumulated data and update global hash
         new_parent_post_hash = daily_post()
         if new_parent_post_hash:
-            parent_post_hash = new_parent_post_hash
-            logging.info("🔄 Daily post created, measurements continue under new post...")
+            current_parent_post_hash = new_parent_post_hash
+            logging.info(f"✅ Daily post created! New parent hash: {new_parent_post_hash}")
+            logging.info("🔄 All future measurements will now comment under the new daily post...")
 
 if __name__ == "__main__":
     logging.info("🚀 DesoMonitor: Starting up...")

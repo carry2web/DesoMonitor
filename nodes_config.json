@@ -1,0 +1,72 @@
+{
+  "nodes": [
+    {
+      "url": "https://node.deso.org",
+      "name": "Official DeSo Node",
+      "description": "Main DeSo node - confirmed TxIndex enabled",
+      "active": true,
+      "priority": 1,
+      "verified": true,
+      "last_tested": "2025-07-27",
+      "notes": "Last test: 2025-07-27 20:12 | POST: 0.88s, CONFIRM: 7.04s"
+    },
+    {
+      "url": "https://desonode-eu-west-1.desocialworld.com",
+      "name": "DeSocialWorld EU",
+      "description": "European validator node with public API",
+      "active": true,
+      "priority": 2,
+      "verified": true,
+      "last_tested": "2025-07-27",
+      "notes": "Last test: 2025-07-27 20:12 | POST: 0.50s, CONFIRM: 6.03s"
+    },
+    {
+      "url": "https://safetynet.social",
+      "name": "SafetyNet Social",
+      "description": "Community SafetyNet node",
+      "active": true,
+      "priority": 3,
+      "verified": true,
+      "last_tested": "2025-07-27",
+      "notes": "Last test: 2025-07-27 20:12 | POST: 1.86s, CONFIRM: 13.71s"
+    },
+    {
+      "url": "https://node.0xaustinvalidator.com/",
+      "name": "0xAustin Validator",
+      "description": "Austin validator node",
+      "active": false,
+      "priority": 4,
+      "verified": true,
+      "last_tested": "2025-07-27",
+      "notes": "Last test: 2025-07-27 20:12 | POST: 0.42s, CONFIRM: timeout"
+    },
+    {
+      "url": "https://highkey.desovalidator.net",
+      "name": "HighKey Validator",
+      "description": "HighKey validator node",
+      "active": false,
+      "priority": 5,
+      "verified": true,
+      "last_tested": "2025-07-27",
+      "notes": "Last test: 2025-07-27 20:12 | POST: 0.39s, CONFIRM: timeout"
+    },
+    {
+      "url": "https://desonode.rylees.net/",
+      "name": "Rylee's Node",
+      "description": "Rylee's DeSo node",
+      "active": false,
+      "priority": 6,
+      "verified": true,
+      "last_tested": "2025-07-27",
+      "notes": "Last test: 2025-07-27 20:12 | POST: 0.96s, CONFIRM: timeout"
+    }
+  ],
+  "config": {
+    "max_active_nodes": 6,
+    "test_interval_days": 7,
+    "timeout_seconds": 30,
+    "min_required_endpoints": 3,
+    "auto_disable_failed_nodes": true,
+    "fallback_to_primary": true
+  }
+}
