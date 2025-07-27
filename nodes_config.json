@@ -29,36 +29,6 @@
       "verified": true,
       "last_tested": "2025-07-27",
       "notes": "Last test: 2025-07-27 20:12 | POST: 1.86s, CONFIRM: 13.71s"
-    },
-    {
-      "url": "https://node.0xaustinvalidator.com/",
-      "name": "0xAustin Validator",
-      "description": "Austin validator node",
-      "active": false,
-      "priority": 4,
-      "verified": true,
-      "last_tested": "2025-07-27",
-      "notes": "Last test: 2025-07-27 20:12 | POST: 0.42s, CONFIRM: timeout"
-    },
-    {
-      "url": "https://highkey.desovalidator.net",
-      "name": "HighKey Validator",
-      "description": "HighKey validator node",
-      "active": false,
-      "priority": 5,
-      "verified": true,
-      "last_tested": "2025-07-27",
-      "notes": "Last test: 2025-07-27 20:12 | POST: 0.39s, CONFIRM: timeout"
-    },
-    {
-      "url": "https://desonode.rylees.net/",
-      "name": "Rylee's Node",
-      "description": "Rylee's DeSo node",
-      "active": false,
-      "priority": 6,
-      "verified": true,
-      "last_tested": "2025-07-27",
-      "notes": "Last test: 2025-07-27 20:12 | POST: 0.96s, CONFIRM: timeout"
     }
   ],
   "config": {
