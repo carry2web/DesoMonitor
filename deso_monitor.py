@@ -59,13 +59,23 @@ current_parent_post_hash = None
 def post_measurement(node, parent_post_hash=None):
     """
     Measure POST speed and CONFIRMATION speed for a DeSo node
+    For POST-only nodes (validators), skip confirmation measurement
     """
     global current_parent_post_hash
     
     # Use global parent post hash if not provided
     if parent_post_hash is None:
         parent_post_hash = current_parent_post_hash
-    logging.info(f"🔄 DesoMonitor: Starting dual measurement for {node}")
+    
+    # Check if this is a POST-only node
+    node_info = node_manager.get_node_info(node)
+    is_post_only = node_info.get("post_only", False) if node_info else False
+    
+    if is_post_only:
+        logging.info(f"🔄 DesoMonitor: Starting POST-only measurement for {node}")
+    else:
+        logging.info(f"🔄 DesoMonitor: Starting dual measurement for {node}")
+    
     start_total = time.time()
     timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     
@@ -76,7 +86,7 @@ def post_measurement(node, parent_post_hash=None):
         client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)
         
         logging.info(f"📝 Testing POST speed to {node}...")
-        temp_comment = f"\U0001F310 Node check-in\nTesting POST + CONFIRMATION...\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
+        temp_comment = f"\U0001F310 Node check-in\nTesting POST" + ("" if is_post_only else " + CONFIRMATION") + f"...\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
         
         post_resp = client.submit_post(
             updater_public_key_base58check=PUBLIC_KEY,
@@ -102,7 +112,37 @@ def post_measurement(node, parent_post_hash=None):
         measurements[node].append((timestamp, None, None, str(e)))
         return
     
-    # Phase 2: Measure CONFIRMATION speed
+    # Phase 2: Measure CONFIRMATION speed (skip for POST-only nodes)
+    if is_post_only:
+        # For POST-only nodes, record measurement with None for confirmation
+        final_comment = f"\U0001F310 Node Performance RESULT (POST-only)\nPOST: {post_elapsed:.2f}s | Node Type: Validator\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
+        
+        logging.info(f"📝 Posting POST-only result...")
+        try:
+            final_resp = client.submit_post(
+                updater_public_key_base58check=PUBLIC_KEY,
+                body=final_comment,
+                parent_post_hash_hex=parent_post_hash,
+                title="",
+                image_urls=[],
+                video_urls=[],
+                post_extra_data={"Node": node, "Type": "measurement_result", "PostTime": f"{post_elapsed:.2f}", "NodeType": "validator"},
+                min_fee_rate_nanos_per_kb=1000,
+                is_hidden=False,
+                in_tutorial=False
+            )
+            client.sign_and_submit_txn(final_resp)
+            
+            logging.info(f"🎯 SUCCESS (POST-only): {node} - POST: {post_elapsed:.2f}s")
+            print(final_comment)
+            measurements[node].append((timestamp, post_elapsed, None, "Success (POST-only)"))
+            
+        except Exception as result_err:
+            logging.warning(f"⚠️ Result post failed, but measurements recorded: {result_err}")
+            measurements[node].append((timestamp, post_elapsed, None, "Result post failed"))
+        return
+    
+    # Phase 2: Measure CONFIRMATION speed (for full nodes only)
     confirm_start = time.time()
     try:
         logging.info(f"⏳ Waiting for CONFIRMATION from {node}...")
@@ -172,32 +212,53 @@ def generate_daily_graph():
     # Create subplot with two graphs
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
     
-    # Graph 1: POST Speed
+    # Graph 1: POST Speed (includes both full nodes and POST-only validators)
     ax1.set_title("DeSo Node POST Speed (Transaction Submission)")
     for node in NODES:
+        # Check if this is a POST-only node
+        node_info = node_manager.get_node_info(node)
+        is_post_only = node_info.get("post_only", False) if node_info else False
+        node_name = node_info.get("name", node) if node_info else node
+        
         # Extract data: (timestamp, post_time, confirm_time, status)
         valid_data = [(t, p) for t, p, c, s in measurements[node] if p is not None]
         if valid_data:
             times = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") for t, p in valid_data]
             post_times = [p for t, p in valid_data]
-            ax1.plot(times, post_times, label=f"{node} (POST)", marker='o', markersize=3)
-            logging.info(f"📊 POST data for {node}: {len(post_times)} measurements")
+            
+            # Different styling for POST-only nodes
+            if is_post_only:
+                ax1.plot(times, post_times, label=f"{node_name} (POST-only/Validator)", 
+                        marker='D', markersize=4, linestyle='--', alpha=0.8)
+            else:
+                ax1.plot(times, post_times, label=f"{node_name} (Full Node)", 
+                        marker='o', markersize=3)
+            logging.info(f"📊 POST data for {node_name}: {len(post_times)} measurements")
     
     ax1.set_xlabel("Time")
     ax1.set_ylabel("POST Speed (seconds)")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # Graph 2: CONFIRMATION Speed  
-    ax2.set_title("DeSo Node CONFIRMATION Speed (Transaction Commitment)")
+    # Graph 2: CONFIRMATION Speed (only full nodes, exclude POST-only validators)
+    ax2.set_title("DeSo Node CONFIRMATION Speed (Transaction Commitment - Full Nodes Only)")
     for node in NODES:
+        # Check if this is a POST-only node
+        node_info = node_manager.get_node_info(node)
+        is_post_only = node_info.get("post_only", False) if node_info else False
+        node_name = node_info.get("name", node) if node_info else node
+        
+        # Skip POST-only nodes for confirmation graph
+        if is_post_only:
+            continue
+            
         # Extract confirmation data
         valid_data = [(t, c) for t, p, c, s in measurements[node] if c is not None]
         if valid_data:
             times = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") for t, c in valid_data]
             confirm_times = [c for t, c in valid_data]
-            ax2.plot(times, confirm_times, label=f"{node} (CONFIRM)", marker='s', markersize=3)
-            logging.info(f"📊 CONFIRM data for {node}: {len(confirm_times)} measurements")
+            ax2.plot(times, confirm_times, label=f"{node_name} (CONFIRM)", marker='s', markersize=3)
+            logging.info(f"📊 CONFIRM data for {node_name}: {len(confirm_times)} measurements")
     
     ax2.set_xlabel("Time")
     ax2.set_ylabel("CONFIRMATION Speed (seconds)")
@@ -219,8 +280,14 @@ def generate_gauge():
     node_names = []
     post_medians = []
     confirm_medians = []
+    node_types = []  # Track node types for styling
     
     for node in NODES:
+        # Check if this is a POST-only node
+        node_info = node_manager.get_node_info(node)
+        is_post_only = node_info.get("post_only", False) if node_info else False
+        node_name = node_info.get("name", node) if node_info else node
+        
         # Extract POST times
         post_times = [p for t, p, c, s in measurements[node] if p is not None]
         confirm_times = [c for t, p, c, s in measurements[node] if c is not None]
@@ -231,46 +298,65 @@ def generate_gauge():
         else:
             post_medians.append(0)
             
-        if confirm_times:
-            confirm_median = np.median(confirm_times)
-            confirm_medians.append(confirm_median)
-        else:
+        # For POST-only nodes, set confirm time to 0 and mark appropriately
+        if is_post_only:
             confirm_medians.append(0)
+            node_types.append("validator")
+            display_name = f"{node_name} (Validator)"
+        else:
+            if confirm_times:
+                confirm_median = np.median(confirm_times)
+                confirm_medians.append(confirm_median)
+            else:
+                confirm_medians.append(0)
+            node_types.append("full")
+            display_name = f"{node_name} (Full Node)"
             
-        # Shorten node names for display
-        short_name = node.replace("https://", "").replace("www.", "")
-        if len(short_name) > 25:
-            short_name = short_name[:25] + "..."
-        node_names.append(short_name)
+        node_names.append(display_name)
         
-        logging.info(f"🎯 {node}: POST {post_medians[-1]:.2f}s, CONFIRM {confirm_medians[-1]:.2f}s")
+        if is_post_only:
+            logging.info(f"🎯 {node_name}: POST {post_medians[-1]:.2f}s (Validator - POST only)")
+        else:
+            logging.info(f"🎯 {node_name}: POST {post_medians[-1]:.2f}s, CONFIRM {confirm_medians[-1]:.2f}s")
     
     # Create horizontal bars
     y_pos = np.arange(len(node_names))
     bar_height = 0.35
     
-    # POST bars (left side)
-    bars1 = ax.barh(y_pos - bar_height/2, post_medians, bar_height, 
-                    label='POST Speed', color='#1f77b4', alpha=0.8)
+    # POST bars (different colors for different node types)
+    for i, (post_val, node_type) in enumerate(zip(post_medians, node_types)):
+        color = '#ff7f0e' if node_type == "validator" else '#1f77b4'  # Orange for validators, blue for full nodes
+        bars1 = ax.barh(i - bar_height/2, post_val, bar_height, 
+                       color=color, alpha=0.8)
     
-    # CONFIRM bars (right side) 
-    bars2 = ax.barh(y_pos + bar_height/2, confirm_medians, bar_height,
-                    label='CONFIRM Speed', color='#ff7f0e', alpha=0.8)
+    # CONFIRM bars (only for full nodes)
+    for i, (confirm_val, node_type) in enumerate(zip(confirm_medians, node_types)):
+        if node_type == "full" and confirm_val > 0:
+            bars2 = ax.barh(i + bar_height/2, confirm_val, bar_height,
+                           color='#2ca02c', alpha=0.8)  # Green for confirmation
     
     # Add value labels on bars
-    for i, (post_val, confirm_val) in enumerate(zip(post_medians, confirm_medians)):
+    for i, (post_val, confirm_val, node_type) in enumerate(zip(post_medians, confirm_medians, node_types)):
         if post_val > 0:
             ax.text(post_val + 0.1, i - bar_height/2, f'{post_val:.1f}s', 
                    va='center', fontsize=9)
-        if confirm_val > 0:
+        if node_type == "full" and confirm_val > 0:
             ax.text(confirm_val + 0.1, i + bar_height/2, f'{confirm_val:.1f}s', 
                    va='center', fontsize=9)
+    
+    # Create custom legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#1f77b4', alpha=0.8, label='Full Node - POST Speed'),
+        Patch(facecolor='#ff7f0e', alpha=0.8, label='Validator - POST Speed'),
+        Patch(facecolor='#2ca02c', alpha=0.8, label='Full Node - CONFIRM Speed')
+    ]
     
     ax.set_yticks(y_pos)
     ax.set_yticklabels(node_names)
     ax.set_xlabel('Response Time (seconds)')
     ax.set_title('DeSo Node Performance - POST vs CONFIRMATION Speed (Median)')
-    ax.legend()
+    ax.legend(handles=legend_elements)
     ax.grid(True, alpha=0.3, axis='x')
     
     plt.tight_layout()
