@@ -63,35 +63,38 @@ Lower number = higher priority:
 
 #### **Adding a New Node:**
 
-1. **Add to Configuration:**
+**📋 Standard 3-Step Procedure:**
+
+**Step 1: Add to Configuration JSON**
 ```json
 {
-  "url": "https://your-new-node.com",
-  "name": "Your Node Name",
-  "description": "Your node description",
-  "active": false,
-  "priority": 8,
-  "verified": false,
-  "last_tested": null,
-  "notes": "Needs testing"
+  "url": "https://new-node.example.com/",
+  "name": "New Node Name", 
+  "description": "Description of the new node",
+  "active": false,           // Start inactive until tested
+  "priority": 5,             // Next available priority number
+  "verified": false,         // Will be set by testing
+  "last_tested": "",         // Will be updated by testing
+  "notes": "New node - needs testing"
 }
 ```
 
-2. **Test the Node:**
+**Step 2: Test Node Capabilities**
 ```bash
-python test_nodes.py
+.\.venv\Scripts\python.exe test_nodes.py
 ```
 
-3. **Review Test Results:**
-- Check `node_test.log` for detailed results
-- Verify the node can POST and CONFIRM transactions
-- Ensure TxIndex is enabled for confirmation timing
+**What the test determines automatically:**
+- ✅ **Full Node (TxIndex enabled):** `active: true, verified: true` - Monitors POST + CONFIRMATION
+- ⚠️ **Validator (No TxIndex):** `active: true, verified: true, post_only: true` - Monitors POST only  
+- ❌ **Failed Node:** `active: false, verified: false` - Not included in monitoring
 
-4. **Activate if Successful:**
-```json
-"active": true,
-"verified": true
+**Step 3: Deploy to Production**
+```bash
+bash deploy-hetzner-docker.sh
 ```
+
+**✅ Result:** New node automatically integrated with appropriate monitoring based on its capabilities!
 
 #### **Removing a Node:**
 
