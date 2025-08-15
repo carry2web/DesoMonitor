@@ -1,53 +1,46 @@
-{
-  "nodes": [
-    {
-      "url": "https://node.deso.org",
-      "name": "Official DeSo Node",
-      "description": "Main DeSo node - confirmed TxIndex enabled",
-      "active": true,
-      "priority": 1,
-      "verified": true,
-      "last_tested": "2025-08-03",
-      "notes": "Last test: 2025-08-03 09:01 | POST: 1.09s, CONFIRM: 7.15s"
-    },
-    {
-      "url": "https://desonode-eu-west-1.desocialworld.com",
-      "name": "DeSocialWorld EU",
-      "description": "European validator node with public API",
-      "active": true,
-      "priority": 2,
-      "verified": true,
-      "last_tested": "2025-08-03",
-      "notes": "Last test: 2025-08-03 09:01 | POST: 1.10s, CONFIRM: 7.71s"
-    },
-    {
-      "url": "https://safetynet.social",
-      "name": "SafetyNet Social",
-      "description": "Community SafetyNet node",
-      "active": true,
-      "priority": 3,
-      "verified": true,
-      "last_tested": "2025-08-03",
-      "notes": "Last test: 2025-08-03 09:01 | POST: 1.00s, CONFIRM: 23.15s"
-    },
-    {
-      "url": "https://validator.nftz.me/",
-      "name": "NFTz",
-      "description": "The NFTz validator node",
-      "active": true,
-      "priority": 4,
-      "verified": true,
-      "last_tested": "2025-08-03",
-      "notes": "Last test: 2025-08-03 09:01 | POST: 0.66s, CONFIRM: timeout",
-      "post_only": true
-    }
-  ],
-  "config": {
-    "max_active_nodes": 6,
-    "test_interval_days": 7,
-    "timeout_seconds": 30,
-    "min_required_endpoints": 3,
-    "auto_disable_failed_nodes": true,
-    "fallback_to_primary": true
+[
+  {
+    "url": "https://node.deso.org",
+    "name": "Official DeSo Node",
+    "description": "Main DeSo node with TxIndex enabled",
+    "active": true,
+    "priority": 1,
+    "verified": true,
+    "post_only": false,
+    "last_tested": "",
+    "notes": ""
+  },
+  {
+    "url": "https://desonode-eu-west-1.desocialworld.com",
+    "name": "DeSocialWorld EU",
+    "description": "DeSocialWorld validator with public API and TxIndex",
+    "active": true,
+    "priority": 2,
+    "verified": true,
+    "post_only": false,
+    "last_tested": "",
+    "notes": ""
+  },
+  {
+    "url": "https://safetynet.social",
+    "name": "SafetyNet Social",
+    "description": "SafetyNet node with TxIndex enabled",
+    "active": true,
+    "priority": 3,
+    "verified": true,
+    "post_only": false,
+    "last_tested": "",
+    "notes": ""
+  },
+  {
+    "url": "https://validator.nftz.me",
+    "name": "NFTz",
+    "description": "The NFTz validator node",
+    "active": true,
+    "priority": 4,
+    "verified": true,
+    "post_only": true,
+    "last_tested": "",
+    "notes": "POST-only validator (no TxIndex)"
   }
-}
+]
