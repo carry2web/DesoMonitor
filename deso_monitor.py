@@ -71,24 +71,32 @@ load_dotenv()
 SEED_HEX = os.getenv("DESO_SEED_HEX",""").replace('"','').replace("'",""").strip()
 PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY",""").replace('"','').replace("'",""").strip()
 
-# Try to fetch config from on-chain post
-try:
-    config = fetch_config_from_post(CONFIG_POST_HASH)
-    NODES = config.get("NODES", ["https://node.deso.org"])
-    SCHEDULE_INTERVAL = int(config.get("SCHEDULE_INTERVAL", 3600))
-    DAILY_POST_TIME = config.get("DAILY_POST_TIME", "00:00")
-    POST_TAG = config.get("POST_TAG", "#desomonitormeasurement")
-    if isinstance(NODES, str):
-        NODES = [n.strip() for n in NODES.split(",") if n.strip()]
-    logging.info(f"DEBUG: Loaded NODES from config post: {NODES} (count={len(NODES)})")
-except Exception as e:
-    print(f"Error loading config from chain: {e}. Falling back to .env config.")
-    NODES = os.getenv("DESO_NODES", "https://node.deso.org,https://desocialworld.desovalidator.net,https://safetynet.social")
-    NODES = [n.strip() for n in NODES.split(",") if n.strip()]
-    SCHEDULE_INTERVAL = int(os.getenv("SCHEDULE_INTERVAL", "3600"))
-    DAILY_POST_TIME = os.getenv("DAILY_POST_TIME", "00:00")
-    POST_TAG = os.getenv("POST_TAG", "#desomonitormeasurement")
 
+# --- Config loader ---
+def load_config():
+    try:
+        config = fetch_config_from_post(CONFIG_POST_HASH)
+        nodes = config.get("NODES", ["https://node.deso.org"])
+        schedule_interval = int(config.get("SCHEDULE_INTERVAL", 3600))
+        daily_post_time = config.get("DAILY_POST_TIME", "00:00")
+        post_tag = config.get("POST_TAG", "#desomonitormeasurement")
+        graph_days = int(config.get("GRAPH_DAYS", 7))
+        if isinstance(nodes, str):
+            nodes = [n.strip() for n in nodes.split(",") if n.strip()]
+        logging.info(f"DEBUG: Loaded NODES from config post: {nodes} (count={len(nodes)})")
+        return nodes, schedule_interval, daily_post_time, post_tag, graph_days
+    except Exception as e:
+        print(f"Error loading config from chain: {e}. Falling back to .env config.")
+        nodes = os.getenv("DESO_NODES", "https://node.deso.org,https://desocialworld.desovalidator.net,https://safetynet.social")
+        nodes = [n.strip() for n in nodes.split(",") if n.strip()]
+        schedule_interval = int(os.getenv("SCHEDULE_INTERVAL", "3600"))
+        daily_post_time = os.getenv("DAILY_POST_TIME", "00:00")
+        post_tag = os.getenv("POST_TAG", "#desomonitormeasurement")
+        graph_days = int(os.getenv("GRAPH_DAYS", "7"))
+        return nodes, schedule_interval, daily_post_time, post_tag, graph_days
+
+# Initial config load
+NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = load_config()
 # Data storage
 measurements = {node: [] for node in NODES}
 
@@ -240,17 +248,20 @@ def scheduled_measurements(parent_post_hash):
         logging.info(f"💤 DesoMonitor: Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
         time.sleep(SCHEDULE_INTERVAL)
 
-def generate_daily_graph():
-    logging.info("📈 DesoMonitor: Generating daily performance graph...")
+def generate_daily_graph(graph_days=7):
+    logging.info(f"📈 DesoMonitor: Generating performance graph for last {graph_days} days...")
     plt.figure(figsize=(8, 4))
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=graph_days)
     for node in NODES:
-        times = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") for t, e in measurements[node] if e is not None]
-        elapsed = [e for t, e in measurements[node] if e is not None]
+        # Only keep data within the last graph_days
+        filtered = [(t, e) for t, e in measurements[node] if e is not None and datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") >= cutoff]
+        times = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") for t, e in filtered]
+        elapsed = [e for t, e in filtered]
         plt.plot(times, elapsed, label=node)
-        logging.info(f"📊 Graph data for {node}: {len(elapsed)} measurements")
+        logging.info(f"📊 Graph data for {node}: {len(elapsed)} measurements (last {graph_days} days)")
     plt.xlabel("Time")
     plt.ylabel("Elapsed (sec)")
-    plt.title("Node Performance - Daily")
+    plt.title(f"Node Performance - Last {graph_days} Days")
     plt.legend()
     plt.tight_layout()
     plt.savefig("daily_performance.png")
@@ -279,7 +290,7 @@ def generate_gauge():
 
 def daily_post():
     logging.info("📋 DesoMonitor: Starting daily summary post creation...")
-    generate_daily_graph()
+    generate_daily_graph(GRAPH_DAYS)
     generate_gauge()
     body = f"\U0001F4C8 Daily Node Performance Summary\n{POST_TAG}"
     try:
@@ -308,29 +319,40 @@ def daily_post():
         return None
 
 def daily_scheduler():
+    global NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, measurements
     logging.info("📅 DesoMonitor: Daily scheduler started")
-    
+
     # Start measurements immediately with a temporary parent post
     logging.info("🚀 Creating initial daily post...")
     parent_post_hash = daily_post()
-    
+
     if parent_post_hash:
         logging.info("🔄 Starting initial measurements thread...")
         threading.Thread(target=scheduled_measurements, args=(parent_post_hash,), daemon=True).start()
-    
+
     while True:
         now = datetime.datetime.utcnow()
         target = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if now > target:
             target += datetime.timedelta(days=1)
         sleep_time = (target - now).total_seconds()
-        
+
         hours = int(sleep_time // 3600)
         minutes = int((sleep_time % 3600) // 60)
         logging.info(f"⏰ DesoMonitor: Next daily post in {hours}h {minutes}m at {target.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-        
+
         time.sleep(sleep_time)
-        
+
+        # Re-read config at daily restart
+        NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = load_config()
+        # Re-init measurements for new/removed nodes
+        for node in NODES:
+            if node not in measurements:
+                measurements[node] = []
+        for node in list(measurements.keys()):
+            if node not in NODES:
+                del measurements[node]
+
         # Create new daily post with accumulated data
         new_parent_post_hash = daily_post()
         if new_parent_post_hash:
