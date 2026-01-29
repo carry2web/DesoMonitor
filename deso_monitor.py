@@ -230,35 +230,92 @@ def post_measurement(node, parent_post_hash):
         measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
 
 def scheduled_measurements(parent_post_hash):
-    logging.info(f"🚀 DesoMonitor: Starting scheduled measurements every {SCHEDULE_INTERVAL} seconds")
+    logging.info(f"🚀 DesoMonitor: Starting scheduled measurements every {SCHEDULE_INTERVAL} seconds (thread started, parent_post_hash={parent_post_hash})")
+    print(f"[DesoMonitor] Measurement thread started. Parent post hash: {parent_post_hash}")
     measurement_count = 0
-    while True:
-        measurement_count += 1
-        logging.info(f"📊 DesoMonitor: Starting measurement cycle #{measurement_count} for {len(NODES)} nodes")
-        logging.info(f"DEBUG: Full NODES list for monitoring: {NODES}")
-        for i, node in enumerate(NODES, 1):
-            logging.info(f"🔍 DesoMonitor: Processing node {i}/{len(NODES)}: {node}")
-            try:
-                post_measurement(node, parent_post_hash)
-            except Exception as e:
-                logging.error(f"❌ ERROR: Exception during monitoring node {node}: {e}")
-                # Still log the failed attempt for visibility
-                measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
-        next_run = datetime.datetime.utcnow() + datetime.timedelta(seconds=SCHEDULE_INTERVAL)
-        logging.info(f"💤 DesoMonitor: Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
-        time.sleep(SCHEDULE_INTERVAL)
+    try:
+        while True:
+            measurement_count += 1
+            logging.info(f"📊 DesoMonitor: Starting measurement cycle #{measurement_count} for {len(NODES)} nodes")
+            logging.info(f"DEBUG: Full NODES list for monitoring: {NODES}")
+            for i, node in enumerate(NODES, 1):
+                logging.info(f"🔍 DesoMonitor: Processing node {i}/{len(NODES)}: {node} (parent_post_hash={parent_post_hash})")
+                print(f"[DesoMonitor] Posting measurement for node {node} (parent_post_hash={parent_post_hash})")
+                try:
+                    post_measurement(node, parent_post_hash)
+                except Exception as e:
+                    logging.error(f"❌ ERROR: Exception during monitoring node {node}: {e}")
+                    print(f"[DesoMonitor] ERROR posting measurement for node {node}: {e}")
+                    # Still log the failed attempt for visibility
+                    measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
+            next_run = datetime.datetime.utcnow() + datetime.timedelta(seconds=SCHEDULE_INTERVAL)
+            logging.info(f"💤 DesoMonitor: Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
+            print(f"[DesoMonitor] Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
+            time.sleep(SCHEDULE_INTERVAL)
+    except Exception as thread_exc:
+        logging.error(f"❌ ERROR: Measurement thread crashed: {thread_exc}")
+        print(f"[DesoMonitor] FATAL: Measurement thread crashed: {thread_exc}")
 
 def generate_daily_graph(graph_days=7):
-    logging.info(f"📈 DesoMonitor: Generating performance graph for last {graph_days} days...")
-    plt.figure(figsize=(8, 4))
+    logging.info(f"📈 DesoMonitor: Generating performance graph for last {graph_days} days (from on-chain comments)...")
+    # Find the latest daily post (by this account, with the tag)
+    client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)
+    url = f"{client.node_url}/api/v0/get-posts-for-public-key"
+    payload = {"PublicKeyBase58Check": PUBLIC_KEY, "NumToFetch": 20}
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    posts = resp.json().get("Posts", [])
+    # Find the most recent post with the tag
+    daily_post = None
+    for post in posts:
+        if POST_TAG in post.get("Body", ""):
+            daily_post = post
+            break
+    if not daily_post:
+        logging.error("No daily post found for graph generation!")
+        return
+    daily_post_hash = daily_post.get("PostHashHex")
+    # Fetch all comments (replies) to the daily post using /get-single-post
+    url = f"{client.node_url}/api/v0/get-single-post"
+    payload = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": 100}
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    comments = resp.json().get("PostFound", {}).get("Comments", [])
+    # Filter measurement comments
+    measurement_comments = [c for c in comments if POST_TAG in c.get("Body", "")]
+    # Parse measurement data
+    import re
+    node_times = {node: [] for node in NODES}
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=graph_days)
-    for node in NODES:
-        # Only keep data within the last graph_days
-        filtered = [(t, e) for t, e in measurements[node] if e is not None and datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") >= cutoff]
-        times = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") for t, e in filtered]
-        elapsed = [e for t, e in filtered]
-        plt.plot(times, elapsed, label=node)
-        logging.info(f"📊 Graph data for {node}: {len(elapsed)} measurements (last {graph_days} days)")
+    for c in measurement_comments:
+        body = c.get("Body", "")
+        node = None
+        elapsed = None
+        timestamp = None
+        # Try to extract node, elapsed, timestamp from body
+        m_node = re.search(r"Node: (.+)", body)
+        m_elapsed = re.search(r"Elapsed: ([0-9.]+) sec", body)
+        m_time = re.search(r"Timestamp: ([0-9\-: ]+ UTC)", body)
+        if m_node:
+            node = m_node.group(1).strip()
+        if m_elapsed:
+            elapsed = float(m_elapsed.group(1))
+        if m_time:
+            timestamp = m_time.group(1).strip()
+        if node in node_times and elapsed is not None and timestamp is not None:
+            try:
+                t = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S UTC")
+                if t >= cutoff:
+                    node_times[node].append((t, elapsed))
+            except Exception:
+                continue
+    plt.figure(figsize=(8, 4))
+    for node, data in node_times.items():
+        if data:
+            data.sort()
+            times, elapsed = zip(*data)
+            plt.plot(times, elapsed, label=node)
+            logging.info(f"📊 Graph data for {node}: {len(elapsed)} measurements (last {graph_days} days)")
     plt.xlabel("Time")
     plt.ylabel("Elapsed (sec)")
     plt.title(f"Node Performance - Last {graph_days} Days")

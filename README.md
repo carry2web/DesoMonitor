@@ -1,21 +1,17 @@
 # DesoMonitor
 
-This project posts measurement comment posts to selected DeSo backend nodes, timing the performance of each post using the deso-python-sdk. It schedules posts every x minutes and creates a daily main post with graphs and gauges visualizing node performance.
+A Python application that monitors DeSo blockchain node performance by posting measurement comments and timing their responses. Posts scheduled measurements every 10 minutes and creates daily summary posts with performance visualizations.
 
 ## Features
-- Scheduled measurement comment posts to DeSo nodes
-- Timing and logging of post performance
-- Daily summary post with graphs and gauge (median response per node)
-- Comprehensive logging with visual status indicators
-- Uses deso-python-sdk for all DeSo interactions
-
-## 🔴 Live Demo
-**Watch DesoMonitor in action:** https://safetynet.social/u/desomonitor
-
-See real-time node performance measurements and daily summary posts with performance visualizations.
+- **Real-time monitoring**: Posts measurement comments to verified DeSo nodes every 10 minutes
+- **Performance tracking**: Times complete post-to-confirmation cycles with 2-minute timeouts
+- **Daily visualizations**: Generates performance graphs and gauges showing median response times
+- **Comprehensive logging**: Detailed UTF-8 logging with emoji status indicators
+- **Cloud deployment ready**: Includes Docker and deployment scripts for Hetzner/Azure
+- **Verified nodes**: Uses 3 confirmed TxIndex-enabled nodes for reliable monitoring
 
 ## Monitored Nodes
-- `https://node.deso.org` - Main DeSo node  
+- `https://node.deso.org` - Main DeSo node
 - `https://desocialworld.desovalidator.net` - Validator with public API
 - `https://safetynet.social` - SafetyNet community node
 

@@ -1,7 +1,5 @@
 import hashlib
 import json
-import os
-import mimetypes
 
 import requests
 from typing import Optional, Dict, Any, List, Union
@@ -17,7 +15,7 @@ from coincurve import PrivateKey
 import hashlib
 from typing import Optional
 from ecdsa import SigningKey, SECP256k1
-from ecdsa.util import sigencode_der, sigdecode_der
+from ecdsa.util import sigencode_der
 
 import time
 from requests.exceptions import RequestException
@@ -681,132 +679,6 @@ class DeSoDexClient:
             raise requests.exceptions.HTTPError(f"HTTP Error: {e}, Response: {error_json}")
         return resp.json()
 
-    def upload_image(
-            self,
-            image_path: str,
-            user_public_key_base58check: str,
-            extra_headers: Optional[Dict[str, str]] = None,
-    ) -> str:
-        """
-        Upload an image to DeSo and return the image URL.
-
-        Args:
-            image_path (str): Path to the image file to upload.
-            user_public_key_base58check (str): Public key of the user uploading the image.
-            extra_headers (Optional[Dict[str, str]]): Additional headers for the HTTP request.
-
-        Returns:
-            str: The URL where the uploaded image can be accessed.
-
-        Raises:
-            requests.exceptions.RequestException: If the upload request fails.
-            json.JSONDecodeError: If the response parsing fails.
-            ValueError: If the server returns a non-200 status code or ImageURL not found.
-            FileNotFoundError: If the image file doesn't exist.
-        """
-        url = f"{self.node_url}/api/v0/upload-image"
-        
-        try:
-            # Generate JWT token for authentication
-            import time
-            import json
-            import base64
-            from ecdsa import SigningKey, SECP256k1
-            import hashlib
-            
-            # JWT Header - DeSo uses ES256 algorithm with secp256k1 curve  
-            header = {
-                "alg": "ES256",  # DeSo uses ES256 (not ES256K) as shown in docs
-                "typ": "JWT"
-            }
-            
-            # JWT Payload - simplified to match DeSo format
-            current_time = int(time.time())
-            payload = {
-                "iat": current_time,
-                "exp": current_time + 600  # 10 minutes expiry as per DeSo docs
-            }
-            
-            # Encode header and payload
-            header_b64 = base64.urlsafe_b64encode(json.dumps(header, separators=(',', ':')).encode()).decode().rstrip('=')
-            payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(',', ':')).encode()).decode().rstrip('=')
-            
-            # Create message to sign
-            message = f"{header_b64}.{payload_b64}"
-            
-            # Sign using the private key with secp256k1 curve for ES256
-            signing_key = SigningKey.from_string(self.deso_keypair.private_key, curve=SECP256k1)
-            # For ES256, we sign the message hash and need raw signature format (r,s)
-            message_hash = hashlib.sha256(message.encode()).digest()
-            # Use the default sigencode which gives us (r,s) tuple, then concatenate
-            signature_raw = signing_key.sign_digest(message_hash)
-            # ES256 expects 64 bytes: 32 bytes r + 32 bytes s
-            if len(signature_raw) == 64:
-                signature = signature_raw
-            else:
-                # If we get DER format, extract r and s values and concatenate
-                from ecdsa.util import sigdecode_der
-                r, s = sigdecode_der(signature_raw, signing_key.curve.order)
-                signature = r.to_bytes(32, 'big') + s.to_bytes(32, 'big')
-            signature_b64 = base64.urlsafe_b64encode(signature).decode().rstrip('=')
-            
-            # Create final JWT
-            jwt_token = f"{message}.{signature_b64}"
-            
-            # Determine MIME type based on file extension
-            import mimetypes
-            mime_type, _ = mimetypes.guess_type(image_path)
-            if not mime_type or not mime_type.startswith('image/'):
-                # Default to common image types
-                if image_path.lower().endswith('.png'):
-                    mime_type = 'image/png'
-                elif image_path.lower().endswith('.jpg') or image_path.lower().endswith('.jpeg'):
-                    mime_type = 'image/jpeg'
-                elif image_path.lower().endswith('.gif'):
-                    mime_type = 'image/gif'
-                elif image_path.lower().endswith('.webp'):
-                    mime_type = 'image/webp'
-                else:
-                    mime_type = 'image/png'  # Default fallback
-            
-            with open(image_path, 'rb') as image_file:
-                files = {'file': (os.path.basename(image_path), image_file, mime_type)}  # Include filename and MIME type
-                data = {
-                    'UserPublicKeyBase58Check': user_public_key_base58check,
-                    'JWT': jwt_token
-                }
-                headers = {'Origin': self.node_url}
-                
-                if extra_headers:
-                    headers.update(extra_headers)
-                
-                response = requests.post(url, files=files, data=data, headers=headers)
-                
-                try:
-                    response.raise_for_status()
-                except requests.exceptions.HTTPError as e:
-                    try:
-                        error_json = response.json()
-                    except ValueError:
-                        error_json = response.text
-                    raise requests.exceptions.HTTPError(f"HTTP Error: {e}, Response: {error_json}")
-                
-                try:
-                    response_data = response.json()
-                except json.JSONDecodeError as e:
-                    raise json.JSONDecodeError(f"Error parsing upload response: {str(e)}")
-                
-                image_url = response_data.get('ImageURL')
-                if not image_url:
-                    raise ValueError("ImageURL not found in response")
-                
-                return image_url
-                
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Image file not found: {image_path}")
-        except requests.exceptions.RequestException as e:
-            raise requests.exceptions.RequestException(f"Upload request failed: {str(e)}")
-
     def submit_post(
             self,
             updater_public_key_base58check: str,
@@ -1021,12 +893,12 @@ def main():
     """
     # This is very important: If you want to run on mainnet, you must switch this to false.
     # This will switch several other params to the right values.
-    IS_TESTNET = True
+    IS_TESTNET = False
     # You can set any DeSo node you want. The nodes here are the canonical testnet and mainnet
     # ones that a lot of people use for testing. If you don't pass a node_url to the DesoDexClient
     # it will default to one of these depending on the value of is_testnet. We specify them here
     # explicitly just to make you aware that you can set it manually if you want.
-    NODE_URL = "https://test.deso.org"
+    NODE_URL = "https://node.deso.org"
     if not IS_TESTNET:
        NODE_URL = "https://node.deso.org"
 
@@ -1045,9 +917,9 @@ def main():
     #
     # Replace the below with your seed phrase. If you have "passphrase" or a different
     # index you can specify it below as well.
-    SEED_PHRASE_OR_HEX = ""
-    PASSPHRASE = ""
-    INDEX = 0
+    SEED_PHRASE_OR_HEX = "1e63e4fb09650169d1f979c4cd1c42f36e137302dacf646c25a0e015692bd020"
+    PASSPHRASE = ""  # Only needed if you use a mnemonic with a passphrase
+    INDEX = 0        # Only change if you use a non-default derivation index
 
     explorer_link = "explorer-testnet.deso.com" if IS_TESTNET else "explorer.deso.com"
     wallet_link = "wallet-testnet.deso.com" if IS_TESTNET else "wallet.deso.com"
@@ -1118,30 +990,15 @@ def main():
     except Exception as e:
         print(f"ERROR: Get profile failed: {e}")
 
-    print("\n---- Upload Image (example - commented out) ----")
-    # Uncomment and modify the following lines to test image upload:
-    # try:
-    #     print('Uploading example image...')
-    #     # Make sure to put an actual image file in the same directory
-    #     image_url = client.upload_image('example_image.png')
-    #     print(f'Image uploaded successfully! URL: {image_url}')
-    #     print('You can now use this URL in the image_urls parameter of submit_post')
-    #     print('SUCCESS!')
-    # except Exception as e:
-    #     print(f"ERROR: Upload image failed: {e}")
-
     print("\n---- Submit Post ----")
     try:
         print('Constructing submit-post txn...')
-        # Example: If you uploaded an image, you can include it like this:
-        # image_url = client.upload_image('your_image.png')
-        # image_urls = [image_url]
         post_response = client.submit_post(
             updater_public_key_base58check=string_pubkey,
             body="IT WORKED!",
             parent_post_hash_hex="",  # Example parent post hash
             title="",
-            image_urls=[],  # Add uploaded image URLs here
+            image_urls=[],
             video_urls=[],
             post_extra_data={"Node": "1"},
             min_fee_rate_nanos_per_kb=1000,
@@ -1188,8 +1045,10 @@ def main():
         print(f'DESO balance: {deso_balance_nanos} nanos (1e9 = 1 coin) = {client.base_units_to_coins(deso_balance_nanos, is_deso=True)} coins')
         print(f'OPENFUND balance: {openfund_balance_base_units} base units (1e18 = 1 token) = {client.base_units_to_coins(openfund_balance_base_units, is_deso=False)} tokens')
         your_token_balance_base_units = int(balances['Balances'][string_pubkey]['BalanceBaseUnits'])
-        username = single_profile['Username']
-        print(f'${username} balance: {your_token_balance_base_units} base units (1e18 = 1 token) = {client.base_units_to_coins(your_token_balance_base_units, is_deso=False)} tokens')
+        if single_profile is not None:
+            print(f"${single_profile['Username']} balance: {your_token_balance_base_units} base units (1e18 = 1 token) = {client.base_units_to_coins(your_token_balance_base_units, is_deso=False)} tokens")
+        else:
+            print("No profile found for this public key.")
 
     print("\n---- Transfer DESO ----")
     try:
