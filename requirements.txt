@@ -2,3 +2,7 @@ requests==2.31.0
 python-dotenv==1.0.0
 matplotlib==3.7.2
 numpy==1.24.3
+bip32
+mnemonic
+coincurve
+ecdsa
