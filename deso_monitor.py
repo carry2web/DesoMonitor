@@ -42,7 +42,6 @@ def fetch_config_from_post(post_hash):
     # Use mainnet node and always provide seed
     client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)
     url = f"{client.node_url}/api/v0/get-single-post"
-    print(f"Fetching config post from URL: {url} for hash: {post_hash}")
     payload = {"PostHashHex": post_hash}
     resp = requests.post(url, json=payload)
     resp.raise_for_status()
@@ -52,11 +51,10 @@ def fetch_config_from_post(post_hash):
 
     body = post.get("Body", "")
     logging.info(f"DEBUG: Raw config post body (len={len(body)}):\n{body}")
-    logging.info(f"DEBUG: Raw config post body repr: {repr(body)}")
-    print(f"\n--- FETCH CONFIG POST BODY ---\n{body}\n--- END BODY ---\n")
+    # Only one debug print for config fetch and parse
+    print(f"\n--- FETCHED CONFIG POST BODY ---\n{body}\n--- END BODY ---\n")
     try:
         config = json.loads(body)
-        print(f"\n--- PARSED CONFIG ---\n{config}\n--- END CONFIG ---\n")
     except Exception as e:
         logging.error(f"ERROR: Failed to parse config post body as JSON. Exception: {e}")
         logging.error(f"ERROR: Raw config post body repr: {repr(body)}")
@@ -71,6 +69,9 @@ load_dotenv()
 SEED_HEX = os.getenv("DESO_SEED_HEX",""").replace('"','').replace("'",""").strip()
 PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY",""").replace('"','').replace("'",""").strip()
 
+# Load GRAPH_DAYS from .env or config (default 7)
+GRAPH_DAYS = int(os.getenv("GRAPH_DAYS", "7"))
+
 
 # --- Config loader ---
 def load_config():
@@ -80,7 +81,7 @@ def load_config():
         schedule_interval = int(config.get("SCHEDULE_INTERVAL", 3600))
         daily_post_time = config.get("DAILY_POST_TIME", "00:00")
         post_tag = config.get("POST_TAG", "#desomonitormeasurement")
-        graph_days = int(config.get("GRAPH_DAYS", 7))
+        graph_days = int(config.get("GRAPH_DAYS", GRAPH_DAYS))
         if isinstance(nodes, str):
             nodes = [n.strip() for n in nodes.split(",") if n.strip()]
         logging.info(f"DEBUG: Loaded NODES from config post: {nodes} (count={len(nodes)})")
@@ -92,7 +93,7 @@ def load_config():
         schedule_interval = int(os.getenv("SCHEDULE_INTERVAL", "3600"))
         daily_post_time = os.getenv("DAILY_POST_TIME", "00:00")
         post_tag = os.getenv("POST_TAG", "#desomonitormeasurement")
-        graph_days = int(os.getenv("GRAPH_DAYS", "7"))
+        graph_days = int(os.getenv("GRAPH_DAYS", str(GRAPH_DAYS)))
         return nodes, schedule_interval, daily_post_time, post_tag, graph_days
 
 # Initial config load
@@ -257,32 +258,54 @@ def scheduled_measurements(parent_post_hash):
         print(f"[DesoMonitor] FATAL: Measurement thread crashed: {thread_exc}")
 
 def generate_daily_graph(graph_days=7):
+    # Debug: print obscured SEED_HEX to confirm .env is read
+    if SEED_HEX:
+        obscured = SEED_HEX[:4] + "..." + SEED_HEX[-4:]
+        logging.info(f"[DEBUG] SEED_HEX loaded: {obscured} (len={len(SEED_HEX)})")
+    else:
+        logging.warning("[DEBUG] SEED_HEX is empty or not loaded!")
     logging.info(f"📈 DesoMonitor: Generating performance graph for last {graph_days} days (from on-chain comments)...")
-    # Find the latest daily post (by this account, with the tag)
+    # Fetch all daily posts (with the tag) from the last graph_days
     client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)
+    # Dynamically calculate NumToFetch: (GRAPH_DAYS * 24 * (3600 // SCHEDULE_INTERVAL) * len(NODES)) + 100
+    # 24 * (3600 // SCHEDULE_INTERVAL) gives measurements per day per node
+    try:
+        per_day = int(24 * (3600 // SCHEDULE_INTERVAL)) if SCHEDULE_INTERVAL < 3600 else int(24 / (SCHEDULE_INTERVAL / 3600))
+    except Exception:
+        per_day = 24
+    num_to_fetch = graph_days * per_day * len(NODES) + 100
     url = f"{client.node_url}/api/v0/get-posts-for-public-key"
-    payload = {"PublicKeyBase58Check": PUBLIC_KEY, "NumToFetch": 20}
+    payload = {"PublicKeyBase58Check": PUBLIC_KEY, "NumToFetch": num_to_fetch}
     resp = requests.post(url, json=payload)
     resp.raise_for_status()
     posts = resp.json().get("Posts", [])
-    # Find the most recent post with the tag
-    daily_post = None
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=graph_days)
+    # Find all daily posts with the tag and within the cutoff
+    daily_posts = []
     for post in posts:
         if POST_TAG in post.get("Body", ""):
-            daily_post = post
-            break
-    if not daily_post:
-        logging.error("No daily post found for graph generation!")
+            # Try to parse post timestamp
+            post_time = post.get("TimestampNanos")
+            if post_time:
+                # Convert DeSo nanos to datetime
+                t = datetime.datetime.utcfromtimestamp(int(post_time) / 1e9)
+                if t >= cutoff:
+                    daily_posts.append(post)
+    if not daily_posts:
+        logging.error("No daily posts found for graph generation!")
         return
-    daily_post_hash = daily_post.get("PostHashHex")
-    # Fetch all comments (replies) to the daily post using /get-single-post
-    url = f"{client.node_url}/api/v0/get-single-post"
-    payload = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": 100}
-    resp = requests.post(url, json=payload)
-    resp.raise_for_status()
-    comments = resp.json().get("PostFound", {}).get("Comments", [])
-    # Filter measurement comments
-    measurement_comments = [c for c in comments if POST_TAG in c.get("Body", "")]
+    # Aggregate all measurement comments from all daily posts in the window
+    measurement_comments = []
+    for post in daily_posts:
+        daily_post_hash = post.get("PostHashHex")
+        url = f"{client.node_url}/api/v0/get-single-post"
+        payload = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": 100}
+        resp = requests.post(url, json=payload)
+        resp.raise_for_status()
+        comments = resp.json().get("PostFound", {}).get("Comments", [])
+        if comments is None:
+            comments = []
+        measurement_comments.extend([c for c in comments if POST_TAG in c.get("Body", "")])
     # Parse measurement data
     import re
     node_times = {node: [] for node in NODES}
@@ -353,12 +376,14 @@ def daily_post():
     try:
         logging.info("📤 Posting daily summary to DeSo...")
         client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])
+        # Upload the graph image and get the URL
+        image_url = client.upload_image("daily_performance.png")
         post_resp = client.submit_post(
             updater_public_key_base58check=PUBLIC_KEY,
             body=body,
             parent_post_hash_hex=None,
             title="",
-            image_urls=[],
+            image_urls=[image_url],
             video_urls=[],
             post_extra_data={"Node": NODES[0]},
             min_fee_rate_nanos_per_kb=1000,
@@ -379,27 +404,26 @@ def daily_scheduler():
     global NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, measurements
     logging.info("📅 DesoMonitor: Daily scheduler started")
 
-    # Start measurements immediately with a temporary parent post
-    logging.info("🚀 Creating initial daily post...")
-    parent_post_hash = daily_post()
-
-    if parent_post_hash:
-        logging.info("🔄 Starting initial measurements thread...")
-        threading.Thread(target=scheduled_measurements, args=(parent_post_hash,), daemon=True).start()
-
+    # Wait until 5 minutes before the next daily post to generate the graph
     while True:
         now = datetime.datetime.utcnow()
         target = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if now > target:
             target += datetime.timedelta(days=1)
-        sleep_time = (target - now).total_seconds()
-
-        hours = int(sleep_time // 3600)
-        minutes = int((sleep_time % 3600) // 60)
-        logging.info(f"⏰ DesoMonitor: Next daily post in {hours}h {minutes}m at {target.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-
-        time.sleep(sleep_time)
-
+        graph_time = target - datetime.timedelta(minutes=5)
+        sleep_time = (graph_time - now).total_seconds()
+        if sleep_time > 0:
+            logging.info(f"⏰ DesoMonitor: Next graph generation in {int(sleep_time//60)}m {int(sleep_time%60)}s at {graph_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            time.sleep(sleep_time)
+        # Generate the graph for the last GRAPH_DAYS days
+        generate_daily_graph(GRAPH_DAYS)
+        generate_gauge()
+        # Wait until 0:00 to post the daily summary
+        now = datetime.datetime.utcnow()
+        sleep_to_post = (target - now).total_seconds()
+        if sleep_to_post > 0:
+            logging.info(f"⏰ DesoMonitor: Waiting {int(sleep_to_post//60)}m {int(sleep_to_post%60)}s to post daily summary at {target.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            time.sleep(sleep_to_post)
         # Re-read config at daily restart
         NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = load_config()
         # Re-init measurements for new/removed nodes
@@ -409,8 +433,7 @@ def daily_scheduler():
         for node in list(measurements.keys()):
             if node not in NODES:
                 del measurements[node]
-
-        # Create new daily post with accumulated data
+        # Create new daily post with the just-generated graph
         new_parent_post_hash = daily_post()
         if new_parent_post_hash:
             parent_post_hash = new_parent_post_hash
@@ -418,7 +441,7 @@ def daily_scheduler():
 
 if __name__ == "__main__":
     logging.info("🚀 DesoMonitor: Starting up...")
-    # Direct test/debug call to fetch_config_from_post
+    # Optional: fetch and print config for debug
     print("\n--- DEBUG: Fetching config post directly ---")
     try:
         debug_config = fetch_config_from_post(CONFIG_POST_HASH)
@@ -431,10 +454,25 @@ if __name__ == "__main__":
     logging.info(f"📊 Configuration: {len(NODES)} nodes, {SCHEDULE_INTERVAL}s interval")
     for i, node in enumerate(NODES, 1):
         logging.info(f"   Node {i}: {node}")
-    
+
+    # --- NEW LOGIC: Create daily post and graph at startup ---
+    logging.info("🌅 Creating daily post and graph at startup...")
+    generate_daily_graph(GRAPH_DAYS)
+    generate_gauge()
+    parent_post_hash = daily_post()
+    if not parent_post_hash:
+        logging.error("❌ Failed to create initial daily post. Exiting.")
+        exit(1)
+    logging.info(f"🌅 Initial daily post created. Parent post hash: {parent_post_hash}")
+
+    # Start measurement thread with the new parent_post_hash
+    logging.info("📏 Starting measurement thread...")
+    threading.Thread(target=scheduled_measurements, args=(parent_post_hash,), daemon=True).start()
+
+    # Start daily scheduler thread (will update parent_post_hash at midnight)
     logging.info("📅 Starting daily scheduler thread...")
     threading.Thread(target=daily_scheduler, daemon=True).start()
-    
+
     logging.info("💤 DesoMonitor: Ready and running. Press Ctrl+C to stop.")
     try:
         while True:
