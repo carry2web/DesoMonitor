@@ -1,0 +1,3 @@
+[submodule "deso-sdk-fork"]
+	path = deso-sdk-fork
+	url = https://github.com/carry2web/deso-python-sdk.git
