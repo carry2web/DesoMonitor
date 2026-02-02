@@ -17,7 +17,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 
 # Copy only needed application files (exclude deso_sdk.py)
-COPY deso_monitor_cloud.py .
 COPY deso_monitor.py .
 COPY node_manager.py .
 COPY scammer_report_bot.py .
@@ -29,7 +28,7 @@ COPY generate_sample_graphs.py .
 COPY get-graph.py .
 COPY *.md .
 # Copy the forked SDK directory
-COPY deso-sdk-fork/ deso-sdk-fork/
+COPY deso_sdk_fork/ deso_sdk_fork/
 
 # Create directory for logs and graphs
 RUN mkdir -p /app/data
@@ -43,4 +42,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import os; exit(0 if os.path.exists('desomonitor.log') else 1)"
 
 # Run the monitor
-CMD ["python", "deso_monitor_cloud.py"]
+CMD ["python", "deso_monitor.py"]
