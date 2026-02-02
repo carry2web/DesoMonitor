@@ -1,4 +1,3 @@
-import time
 import threading
 import datetime
 import matplotlib.pyplot as plt
@@ -7,6 +6,15 @@ import logging
 from dotenv import load_dotenv
 from deso_sdk import DeSoDexClient
 
+import time
+import threading
+import datetime
+import matplotlib.pyplot as plt
+import os
+import logging
+import json
+from dotenv import load_dotenv
+from deso_sdk import DeSoDexClient
 # Setup logging with UTF-8 encoding
 import sys
 
@@ -31,11 +39,12 @@ matplotlib.use('Agg')  # Use non-interactive backend
 
 # Configuration - Verified nodes with TxIndex enabled
 NODES = [
-    "https://node.deso.org",  # Main DeSo node - confirmed TxIndex enabled
-    "https://desocialworld.desovalidator.net",  # Validator with public API - confirmed TxIndex enabled
-    "https://safetynet.social"  # SafetyNet node - confirmed working
-]
-SCHEDULE_INTERVAL = 600  # seconds
+ "https://node.deso.org",
+ "https://desonode-eu-west-1.desocialworld.com",
+ "https://validator.safetynet.social",
+ "https://node.beyondsocial.app"
+ ]
+SCHEDULE_INTERVAL = 3600  # seconds
 DAILY_POST_TIME = "00:00"  # UTC time for daily summary post
 POST_TAG = "#desomonitormeasurement"
 
@@ -44,7 +53,28 @@ PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY").replace('"','').replace("'","").strip(
 SEED_HEX = os.getenv("DESO_SEED_HEX").replace('"','').replace("'","").strip()
 
 # Data storage
+
+MEASUREMENTS_FILE = "measurements.json"
 measurements = {node: [] for node in NODES}
+
+def save_measurements():
+    """Save measurements to JSON, keeping only last 30 days for each node."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    filtered = {}
+    for node, entries in measurements.items():
+        filtered_entries = []
+        for t, e in entries:
+            try:
+                dt = datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC")
+                if dt >= cutoff:
+                    filtered_entries.append((t, e))
+            except Exception:
+                # If timestamp is invalid, keep entry
+                filtered_entries.append((t, e))
+        filtered[node] = filtered_entries
+    with open(MEASUREMENTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(filtered, f, indent=2, ensure_ascii=False)
+    logging.info(f"💾 Measurements saved to {MEASUREMENTS_FILE} (clipped to 30 days)")
 
 
 def post_measurement(node, parent_post_hash):
@@ -102,16 +132,19 @@ def post_measurement(node, parent_post_hash):
             logging.info(f"✅ SUCCESS: {node} responded in {elapsed:.2f} seconds")
             print(final_comment)
             measurements[node].append((timestamp, elapsed))
+            save_measurements()
         except Exception as confirm_err:
             elapsed = time.time() - start
             logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
             print(f"Reply txn not confirmed for {node}: {confirm_err}")
             measurements[node].append((timestamp, None))
+            save_measurements()
     except Exception as e:
         elapsed = time.time() - start
         logging.error(f"❌ ERROR: Failed to post to {node} after {elapsed:.2f}s: {e}")
         print(f"Error posting to {node}: {e}")
         measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
+        save_measurements()
 
 def scheduled_measurements(parent_post_hash):
     logging.info(f"🚀 DesoMonitor: Starting scheduled measurements every {SCHEDULE_INTERVAL} seconds")
@@ -171,6 +204,7 @@ def daily_post():
     generate_gauge()
     body = f"\U0001F4C8 Daily Node Performance Summary\n{POST_TAG}"
     try:
+        save_measurements()
         logging.info("📤 Posting daily summary to DeSo...")
         client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])
         post_resp = client.submit_post(
