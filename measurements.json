@@ -1,0 +1,26 @@
+{
+  "https://node.deso.org": [
+    [
+      "2026-02-02 20:45:46 UTC",
+      8.110645532608032
+    ]
+  ],
+  "https://desonode-eu-west-1.desocialworld.com": [
+    [
+      "2026-02-02 20:45:55 UTC",
+      10.309231996536255
+    ]
+  ],
+  "https://validator.safetynet.social": [
+    [
+      "2026-02-02 20:46:06 UTC",
+      46.7278037071228
+    ]
+  ],
+  "https://node.beyondsocial.app": [
+    [
+      "2026-02-02 20:46:53 UTC",
+      26.207526206970215
+    ]
+  ]
+}

@@ -1,4 +1,3 @@
-import time
 import threading
 import datetime
 import matplotlib.pyplot as plt
@@ -9,61 +8,11 @@ from dotenv import load_dotenv
 from deso_sdk_fork.deso_sdk import DeSoDexClient
 import requests
 
-# Setup logging with UTF-8 encoding
-import sys
-
-# Configure console output for UTF-8 on Windows
-if sys.platform == "win32":
-    import codecs
-    sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
-    sys.stderr = codecs.getwriter("utf-8")(sys.stderr.detach())
-
-
-# Ensure data directory exists for logging
-os.makedirs('data', exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('data/desomonitor.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-
-
-def main():
-    # Check for --single-daily-graph flag or MODE config
-    global SINGLE_DAILY_GRAPH_MODE
-    SINGLE_DAILY_GRAPH_MODE = False
-    single_date = None
-    global SIMULATED_TODAY
-    # CLI flag takes precedence
-    if '--single-daily-graph' in sys.argv:
-        idx = sys.argv.index('--single-daily-graph')
-        if idx + 1 < len(sys.argv):
-            try:
-                single_date = datetime.datetime.strptime(sys.argv[idx+1], '%Y-%m-%d').date()
-                SIMULATED_TODAY = single_date
-                SINGLE_DAILY_GRAPH_MODE = True
-                print(f"[DesoMonitor] Running single daily graph post for {single_date}")
-                generate_daily_graph()
-                print(f"[DesoMonitor] Done. Exiting after single daily graph post for {single_date}.")
-                sys.exit(0)
-            except Exception as e:
-                print(f"[DesoMonitor] Invalid date for --single-daily-graph: {e}")
-                sys.exit(1)
-        else:
-            print("[DesoMonitor] Usage: --single-daily-graph YYYY-MM-DD")
-            sys.exit(1)
-    # MODE config
-    elif MODE.startswith("SINGLE-DAILY-GRAPH"):
-        try:
-            _, date_str = MODE.split(":", 1)
-            single_date = datetime.datetime.strptime(date_str.strip(), '%Y-%m-%d').date()
-            SIMULATED_TODAY = single_date
-            SINGLE_DAILY_GRAPH_MODE = True
-            print(f"[DesoMonitor] Running single daily graph post for {single_date} (from MODE config)")
+import time
+import threading
+import datetime
+import matplotlib.pyplot as plt
+import os
             generate_daily_graph()
             print(f"[DesoMonitor] Done. Exiting after single daily graph post for {single_date} (from MODE config).")
             sys.exit(0)
@@ -76,40 +25,16 @@ import matplotlib
 
 matplotlib.use('Agg')  # Use non-interactive backend
 
-# --- On-chain config ---
-import json
-from deso_sdk_fork.deso_sdk import DeSoDexClient
+# Configuration - Verified nodes with TxIndex enabled
+NODES = [
+    "https://node.deso.org",  # Main DeSo node - confirmed TxIndex enabled
+    "https://desocialworld.desovalidator.net",  # Validator with public API - confirmed TxIndex enabled
+    "https://safetynet.social"  # SafetyNet node - confirmed working
+]
+SCHEDULE_INTERVAL = 600  # seconds
+DAILY_POST_TIME = "00:00"  # UTC time for daily summary post
+POST_TAG = "#desomonitormeasurement"
 
-# Hardcoded config post hash (replace with your config post hash)
-CONFIG_POST_HASH = "91522722c35f6b38588f059723ae3a401a92ae7a09826c6a987bf511d02f21aa"
-
-def fetch_config_from_post(post_hash):
-    # Use mainnet node and always provide seed
-    client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)
-    url = f"{client.node_url}/api/v0/get-single-post"
-    payload = {"PostHashHex": post_hash}
-    resp = requests.post(url, json=payload)
-    resp.raise_for_status()
-    post = resp.json().get("PostFound")
-    if not post:
-        raise Exception("Config post not found")
-
-    body = post.get("Body", "")
-    logging.info(f"DEBUG: Raw config post body (len={len(body)}):\n{body}")
-    # Only one debug print for config fetch and parse
-    print(f"\n--- FETCHED CONFIG POST BODY ---\n{body}\n--- END BODY ---\n")
-    try:
-        config = json.loads(body)
-    except Exception as e:
-        logging.error(f"ERROR: Failed to parse config post body as JSON. Exception: {e}")
-        logging.error(f"ERROR: Raw config post body repr: {repr(body)}")
-        print(f"Config post body (repr): {repr(body)}")
-        raise Exception(f"Config post body is not valid JSON: {e}")
-    return config
-
-
-
-# Always load SEED_HEX and PUBLIC_KEY from .env for security (never from config post)
 load_dotenv()
 SEED_HEX = os.getenv("DESO_SEED_HEX",""").replace('"','').replace("'",""").strip()
 PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY",""").replace('"','').replace("'",""").strip()
@@ -148,7 +73,28 @@ def load_config():
 # Initial config load
 NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, MODE = load_config()
 # Data storage
+
+MEASUREMENTS_FILE = "measurements.json"
 measurements = {node: [] for node in NODES}
+
+def save_measurements():
+    """Save measurements to JSON, keeping only last 30 days for each node."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    filtered = {}
+    for node, entries in measurements.items():
+        filtered_entries = []
+        for t, e in entries:
+            try:
+                dt = datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC")
+                if dt >= cutoff:
+                    filtered_entries.append((t, e))
+            except Exception:
+                # If timestamp is invalid, keep entry
+                filtered_entries.append((t, e))
+        filtered[node] = filtered_entries
+    with open(MEASUREMENTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(filtered, f, indent=2, ensure_ascii=False)
+    logging.info(f"💾 Measurements saved to {MEASUREMENTS_FILE} (clipped to 30 days)")
 
 
 def post_measurement(node, parent_post_hash):
@@ -164,120 +110,59 @@ def post_measurement(node, parent_post_hash):
         logging.info(f"📝 Testing connection to {node}...")
         temp_comment = f"\U0001F310 Node check-in\nTesting connection...\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
         
-        post_resp = None
+        post_resp = client.submit_post(
+            updater_public_key_base58check=PUBLIC_KEY,
+            body=temp_comment,
+            parent_post_hash_hex=parent_post_hash,
+            title="",
+            image_urls=[],
+            video_urls=[],
+            post_extra_data={"Node": node},
+            min_fee_rate_nanos_per_kb=1000,
+            is_hidden=False,
+            in_tutorial=False
+        )
+        submit_resp = client.sign_and_submit_txn(post_resp)
+        txn_hash = submit_resp.get("TxnHashHex")
+        
+        logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash[:8]}...)")
+        # Wait for commitment (confirmed reply) - increased timeout for slow networks
         try:
-            post_resp = client.submit_post(
+            client.wait_for_commitment_with_timeout(txn_hash, 120.0)  # Increased to 2 minutes
+            elapsed = time.time() - start
+            
+            # Now post the actual measurement with real timing as a reply
+            final_comment = f"\U0001F310 Node check-in RESULT\nElapsed: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
+            
+            logging.info(f"📝 Posting final result: {elapsed:.2f}s...")
+            final_resp = client.submit_post(
                 updater_public_key_base58check=PUBLIC_KEY,
-                body=temp_comment,
-                parent_post_hash_hex=parent_post_hash,
+                body=final_comment,
+                parent_post_hash_hex=parent_post_hash,  # Reply to main thread
                 title="",
                 image_urls=[],
                 video_urls=[],
-
-                post_extra_data={"Node": node},
+                post_extra_data={"Node": node, "Type": "measurement_result"},
                 min_fee_rate_nanos_per_kb=1000,
                 is_hidden=False,
                 in_tutorial=False
             )
-            # Save raw response text for debugging
-            raw_post_resp = None
-            try:
-                raw_post_resp = json.dumps(post_resp)
-            except Exception:
-                raw_post_resp = str(post_resp)
-            try:
-                submit_resp = client.sign_and_submit_txn(post_resp)
-            except Exception as post_err:
-                if raw_post_resp is not None:
-                    print(f"\n--- ERROR RESPONSE FROM NODE (SDK payload) ---\n{raw_post_resp}\n--- END ERROR RESPONSE ---\n")
-                    logging.error(f"ERROR RESPONSE FROM NODE {node}: {raw_post_resp}")
-                print(f"Error posting to {node}: {post_err}")
-                logging.error(f"Error posting to {node}: {post_err}")
-                measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
-                # Fallback debug block will run below
-                raise post_err
-            txn_hash = submit_resp.get("TxnHashHex")
-
-            logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash[:8]}...)")
-            # Wait for commitment (confirmed reply) - increased timeout for slow networks
-            try:
-                client.wait_for_commitment_with_timeout(txn_hash, 120.0)  # Increased to 2 minutes
-                elapsed = time.time() - start
-
-                final_comment = f"\U0001F310 Node check-in RESULT\nElapsed: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
-
-                logging.info(f"📝 Posting final result: {elapsed:.2f}s...")
-                final_resp = client.submit_post(
-                    updater_public_key_base58check=PUBLIC_KEY,
-                    body=final_comment,
-                    parent_post_hash_hex=parent_post_hash,  # Reply to main thread
-                    title="",
-                    image_urls=[],
-                    video_urls=[],
-                    post_extra_data={"Node": node, "Type": "measurement_result"},
-                    min_fee_rate_nanos_per_kb=1000,
-                    is_hidden=False,
-                    in_tutorial=False
-                )
-                client.sign_and_submit_txn(final_resp)
-
-                logging.info(f"✅ SUCCESS: {node} responded in {elapsed:.2f} seconds")
-                print(final_comment)
-                measurements[node].append((timestamp, elapsed))
-            except Exception as confirm_err:
-                elapsed = time.time() - start
-                logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
-                print(f"Reply txn not confirmed for {node}: {confirm_err}")
-                measurements[node].append((timestamp, None))
-        except Exception as post_err:
-            # Always print/log the raw response text if available
-            raw_post_resp = None
-            if post_resp is not None:
-                try:
-                    raw_post_resp = json.dumps(post_resp)
-                except Exception:
-                    raw_post_resp = str(post_resp)
-            if raw_post_resp is not None:
-                print(f"\n--- ERROR RESPONSE FROM NODE ---\n{raw_post_resp}\n--- END ERROR RESPONSE ---\n")
-                logging.error(f"ERROR RESPONSE FROM NODE {node}: {raw_post_resp}")
-            print(f"Error posting to {node}: {post_err}")
-            logging.error(f"Error posting to {node}: {post_err}")
-            measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
-            # Fallback: try direct requests.post for debug (always runs on error)
-            try:
-                node_url = node.rstrip('/') + '/api/v0/submit-post'
-                # If SDK payload is not a dict, build a minimal valid payload
-                if isinstance(post_resp, dict) and post_resp:
-                    debug_payload = post_resp
-                else:
-                    debug_payload = {
-                        "UpdaterPublicKeyBase58Check": PUBLIC_KEY,
-                        "Body": temp_comment,
-                        "ParentStakeID": parent_post_hash or "",
-                        "Title": "",
-                        "ImageURLs": [],
-                        "VideoURLs": [],
-                        "PostExtraData": {"Node": node},
-                        "MinFeeRateNanosPerKB": 1000,
-                        "IsHidden": False,
-                        "InTutorial": False
-                    }
-                print(f"\n--- FALLBACK DEBUG ---\nPOST to: {node_url}\nPayload: {json.dumps(debug_payload, indent=2)}\n--- END PAYLOAD ---\n")
-                debug_resp = requests.post(node_url, json=debug_payload)
-                print(f"Status code: {debug_resp.status_code}")
-                print(f"Headers: {debug_resp.headers}")
-                print(f"\n--- RAW NODE RESPONSE ---\n{debug_resp.text}\n--- END RAW NODE RESPONSE ---\n")
-                print(f"\n--- RAW NODE RESPONSE REPR ---\n{repr(debug_resp.text)}\n--- END RAW NODE RESPONSE REPR ---\n")
-                if len(debug_resp.text) > 2000:
-                    print(f"\n--- RAW NODE RESPONSE (first 2000 chars) ---\n{debug_resp.text[:2000]}\n--- END PARTIAL RESPONSE ---\n")
-                logging.error(f"RAW NODE RESPONSE {node}: {debug_resp.text}")
-            except Exception as fallback_err:
-                print(f"Could not fetch raw node response: {fallback_err}")
+            client.sign_and_submit_txn(final_resp)
+            
+            logging.info(f"✅ SUCCESS: {node} responded in {elapsed:.2f} seconds")
+            print(final_comment)
+            measurements[node].append((timestamp, elapsed))
+        except Exception as confirm_err:
+            elapsed = time.time() - start
+            logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
+            print(f"Reply txn not confirmed for {node}: {confirm_err}")
+            measurements[node].append((timestamp, None))
     except Exception as e:
         elapsed = time.time() - start
         logging.error(f"❌ ERROR: Failed to post to {node} after {elapsed:.2f}s: {e}")
         print(f"Error posting to {node}: {e}")
         measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
+        save_measurements()
 
 def scheduled_measurements(parent_post_hash):
     logging.info(f"🚀 DesoMonitor: Starting scheduled measurements every {SCHEDULE_INTERVAL} seconds (thread started, parent_post_hash={parent_post_hash})")
@@ -496,6 +381,7 @@ def daily_post():
     generate_gauge()
     body = f"\U0001F4C8 Daily Node Performance Summary\n{POST_TAG}"
     try:
+        save_measurements()
         logging.info("📤 Posting daily summary to DeSo...")
         client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])
         # Upload the graph image and get the URL
