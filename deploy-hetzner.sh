@@ -17,13 +17,16 @@ echo "🚀 Deploying DesoMonitor to Hetzner server $SERVER_IP..."
 # Create deployment package
 echo "📦 Creating deployment package..."
 tar -czf desomonitor.tar.gz \
-    deso_monitor_cloud.py \
-    deso_sdk.py \
+    deso_monitor.py \
+    node_manager.py \
+    nodes_config.json \
     requirements.txt \
     .env \
+    deso_sdk_fork/ \
     --exclude='__pycache__' \
     --exclude='*.log' \
-    --exclude='*.png'
+    --exclude='*.png' \
+    --exclude='data/'
 
 # Copy files to server
 echo "📤 Uploading files to server..."
@@ -60,7 +63,9 @@ Type=simple
 User=root
 WorkingDirectory=/opt/desomonitor
 Environment=PATH=/opt/desomonitor/venv/bin
-ExecStart=/opt/desomonitor/venv/bin/python deso_monitor_cloud.py
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/opt/desomonitor/venv/bin/python deso_monitor.py
 Restart=always
 RestartSec=10
 
