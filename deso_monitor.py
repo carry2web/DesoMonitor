@@ -1,69 +1,130 @@
+
+
+# --- Imports ---
+import os
+import json
 import time
 import logging
 import threading
 import datetime
-import matplotlib.pyplot as plt
-# Add missing import for dotenv
-from dotenv import load_dotenv
-import os
-# Set matplotlib backend for threading support
+import requests
 import matplotlib
-
-matplotlib.use('Agg')  # Use non-interactive backend
-
-# Configuration - Verified nodes with TxIndex enabled
-NODES = [
-    "https://node.deso.org",
-    "https://desonode-eu-west-1.desocialworld.com",
-    "https://validator.safetynet.social",
-    "https://node.beyondsocial.app"
-]
-SCHEDULE_INTERVAL = 3600  # seconds
-DAILY_POST_TIME = "00:00"  # UTC time for daily summary post
-POST_TAG = "#desomonitormeasurement"
-
-load_dotenv()
-SEED_HEX = os.getenv("DESO_SEED_HEX",""").replace('"','').replace("'",""").strip()
-PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY",""").replace('"','').replace("'",""").strip()
-
-# Load GRAPH_DAYS from .env or config (default 7)
-GRAPH_DAYS = int(os.getenv("GRAPH_DAYS", "7"))
-import time
-import threading
-import datetime
 import matplotlib.pyplot as plt
 import numpy as np
-import os
-import logging
 from dotenv import load_dotenv
 from deso_sdk_fork.deso_sdk import DeSoDexClient
 
-# Set matplotlib backend for threading support
-import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
-
-# Configuration - Verified nodes with TxIndex enabled
-NODES = [
-    "https://node.deso.org",
-    "https://desonode-eu-west-1.desocialworld.com",
-    "https://validator.safetynet.social",
-    "https://node.beyondsocial.app"
-]
-SCHEDULE_INTERVAL = 3600  # seconds
-DAILY_POST_TIME = "00:00"  # UTC time for daily summary post
-POST_TAG = "#desomonitormeasurement"
-
 load_dotenv()
-SEED_HEX = os.getenv("DESO_SEED_HEX","").replace('"','').replace("'","").strip()
-PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY","").replace('"','').replace("'","").strip()
 
-# Data storage
+# --- Logging setup (moved to top for immediate effect) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('desomonitor.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+SEED_HEX = os.getenv("DESO_SEED_HEX", "").replace('"','').replace("'",'').strip()  # from .env: DESO_SEED_HEX
+PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY", "").replace('"','').replace("'",'').strip()  # from .env: DESO_PUBLIC_KEY
+CONFIG_POST_HASH = os.getenv("CONFIG_POST_HASH", "91522722c35f6b38588f059723ae3a401a92ae7a09826c6a987bf511d02f21aa")
+print(f"DEBUG: PUBLIC_KEY loaded: {PUBLIC_KEY}")
+required_env = {
+    'DESO_SEED_HEX': SEED_HEX,
+    'DESO_PUBLIC_KEY': PUBLIC_KEY,
+    'CONFIG_POST_HASH': CONFIG_POST_HASH,
+}
+missing = [k for k, v in required_env.items() if not v or v == '']
+if missing:
+    print(f"FATAL: Missing required .env keys: {', '.join(missing)}. Please set them in your .env file.")
+    import sys
+    sys.exit(1)
+
+# --- On-chain config support ---
+def fetch_config_from_post(post_hash):
+    client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)  # SEED_HEX from DESO_SEED_HEX
+    url = f"{client.node_url}/api/v0/get-single-post"
+    payload = {"PostHashHex": post_hash}
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    post = resp.json().get("PostFound")
+    if not post:
+        raise Exception("Config post not found")
+    body = post.get("Body", "")
+    config = json.loads(body)
+    return config
+
+# --- Config loader and initial config ---
+def load_config():
+    try:
+        config = fetch_config_from_post(CONFIG_POST_HASH)
+        nodes = config.get("NODES", ["https://node.deso.org"])
+        schedule_interval = int(config.get("SCHEDULE_INTERVAL", 3600))
+        daily_post_time = config.get("DAILY_POST_TIME", "00:00")
+        post_tag = config.get("POST_TAG", "#desomonitormeasurement")
+        graph_days = int(config.get("GRAPH_DAYS", 7))
+        mode = config.get("MODE", os.getenv("MODE", "DAILY-CYCLE"))
+        if isinstance(nodes, str):
+            nodes = [n.strip() for n in nodes.split(",") if n.strip()]
+        return nodes, schedule_interval, daily_post_time, post_tag, graph_days, mode
+    except Exception as e:
+        print(f"Error loading config from chain: {e}. Falling back to .env config.")
+        nodes = os.getenv("DESO_NODES", "https://node.deso.org,https://desocialworld.desovalidator.net,https://safetynet.social")
+        nodes = [n.strip() for n in nodes.split(",") if n.strip()]
+        schedule_interval = int(os.getenv("SCHEDULE_INTERVAL", "3600"))
+        daily_post_time = os.getenv("DAILY_POST_TIME", "00:00")
+        post_tag = os.getenv("POST_TAG", "#desomonitormeasurement")
+        graph_days = int(os.getenv("GRAPH_DAYS", "7"))
+        mode = os.getenv("MODE", "DAILY-CYCLE")
+        return nodes, schedule_interval, daily_post_time, post_tag, graph_days, mode
+
+
+# Initial config load
+config_result = load_config()
+if len(config_result) == 6:
+    NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, MODE = config_result
+else:
+    NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = config_result
+    MODE = "DAILY-CYCLE"
+
+# Data storage with persistence
 MEASUREMENTS_FILE = "measurements.json"
-measurements = {node: [] for node in NODES}
+def load_measurements():
+    if os.path.exists(MEASUREMENTS_FILE):
+        with open(MEASUREMENTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Convert keys to current NODES and migrate old format
+        migrated = {}
+        for node in NODES:
+            entries = data.get(node, [])
+            migrated_entries = []
+            for entry in entries:
+                timestamp, measurement = entry
+                # Check if old format (float) or new format (dict)
+                if isinstance(measurement, (int, float)):
+                    # OLD FORMAT: Convert elapsed to estimated POST/CONFIRM split
+                    elapsed = float(measurement)
+                    migrated_entries.append((timestamp, {
+                        "post": elapsed * 0.1,  # Estimate 10% for POST
+                        "confirm": elapsed * 0.9,  # Estimate 90% for CONFIRM
+                        "total": elapsed
+                    }))
+                elif isinstance(measurement, dict):
+                    # NEW FORMAT: Keep as-is
+                    migrated_entries.append((timestamp, measurement))
+                # Skip invalid entries
+            migrated[node] = migrated_entries
+        return migrated
+    else:
+        return {node: [] for node in NODES}
+
+measurements = load_measurements()
 
 def save_measurements():
-    """Save measurements to JSON, keeping only last 30 days for each node."""
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
+    """Save measurements to JSON, keeping only last GRAPH_DAYS for each node."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=GRAPH_DAYS)
     filtered = {}
     for node, entries in measurements.items():
         filtered_entries = []
@@ -77,9 +138,8 @@ def save_measurements():
                 filtered_entries.append((t, e))
         filtered[node] = filtered_entries
     with open(MEASUREMENTS_FILE, "w", encoding="utf-8") as f:
-        import json
         json.dump(filtered, f, indent=2, ensure_ascii=False)
-    logging.info(f"💾 Measurements saved to {MEASUREMENTS_FILE} (clipped to 30 days)")
+    logging.info(f"💾 Measurements saved to {MEASUREMENTS_FILE} (clipped to {GRAPH_DAYS} days)")
 
 def post_measurement(node, parent_post_hash):
     logging.info(f"🔄 DesoMonitor: Starting measurement post to {node}")
@@ -87,12 +147,12 @@ def post_measurement(node, parent_post_hash):
     try:
         timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         logging.info(f"📡 Connecting to {node}...")
-        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)
+        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)  # SEED_HEX from DESO_SEED_HEX
         # Create a temporary post first to measure response time
         logging.info(f"📝 Testing connection to {node}...")
         temp_comment = f"\U0001F310 Node check-in\nTesting connection...\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
         post_resp = client.submit_post(
-            updater_public_key_base58check=PUBLIC_KEY,
+            updater_public_key_base58check=PUBLIC_KEY,  # PUBLIC_KEY from DESO_PUBLIC_KEY
             body=temp_comment,
             parent_post_hash_hex=parent_post_hash,
             title="",
@@ -105,16 +165,22 @@ def post_measurement(node, parent_post_hash):
         )
         submit_resp = client.sign_and_submit_txn(post_resp)
         txn_hash = submit_resp.get("TxnHashHex")
+        post_time = time.time() - start  # Time to POST (submit transaction)
+        
         logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash[:8]}...)")
         # Wait for commitment (confirmed reply) - increased timeout for slow networks
         try:
+            confirm_start = time.time()
             client.wait_for_commitment_with_timeout(txn_hash, 120.0)  # Increased to 2 minutes
+            confirm_time = time.time() - confirm_start  # Time to CONFIRM
             elapsed = time.time() - start
+            
             # Now post the actual measurement with real timing as a reply
-            final_comment = f"\U0001F310 Node check-in RESULT\nElapsed: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
-            logging.info(f"📝 Posting final result: {elapsed:.2f}s...")
+            final_comment = f"\U0001F310 Node check-in RESULT\nPOST: {post_time:.2f} sec\nCONFIRM: {confirm_time:.2f} sec\nTotal: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
+            
+            logging.info(f"📝 Posting final result: POST {post_time:.2f}s, CONFIRM {confirm_time:.2f}s, Total {elapsed:.2f}s...")
             final_resp = client.submit_post(
-                updater_public_key_base58check=PUBLIC_KEY,
+                updater_public_key_base58check=PUBLIC_KEY,  # PUBLIC_KEY from DESO_PUBLIC_KEY
                 body=final_comment,
                 parent_post_hash_hex=parent_post_hash,  # Reply to main thread
                 title="",
@@ -126,13 +192,16 @@ def post_measurement(node, parent_post_hash):
                 in_tutorial=False
             )
             client.sign_and_submit_txn(final_resp)
-            logging.info(f"✅ SUCCESS: {node} responded in {elapsed:.2f} seconds")
+            
+            logging.info(f"✅ SUCCESS: {node} - POST: {post_time:.2f}s, CONFIRM: {confirm_time:.2f}s, Total: {elapsed:.2f}s")
             print(final_comment)
-            measurements[node].append((timestamp, elapsed))
+            measurements[node].append((timestamp, {"post": post_time, "confirm": confirm_time, "total": elapsed}))
             save_measurements()
         except Exception as confirm_err:
             elapsed = time.time() - start
             logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
+            print(f"Reply txn not confirmed for {node}: {confirm_err}")
+            measurements[node].append((timestamp, {"post": post_time, "confirm": None, "total": elapsed}))
             print(f"Reply txn not confirmed for {node}: {confirm_err}")
             measurements[node].append((timestamp, None))
             save_measurements()
@@ -193,20 +262,24 @@ def generate_gauge():
     logging.info("🎯 Daily performance gauge saved as 'daily_gauge.png'")
 
 def daily_post():
+    global PUBLIC_KEY, SEED_HEX
     logging.info("📋 DesoMonitor: Starting daily summary post creation...")
-    generate_daily_graph()
+    generate_daily_graph(GRAPH_DAYS)
     generate_gauge()
     body = f"\U0001F4C8 Daily Node Performance Summary\n{POST_TAG}"
     try:
         save_measurements()
-        logging.info("📤 Posting daily summary to DeSo...")
-        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])
+        logging.info("\U0001F4E4 Posting daily summary to DeSo...")
+        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])  # SEED_HEX from DESO_SEED_HEX
+        # Upload both graph images and get their URLs
+        image_url1 = client.upload_image("daily_performance_stacked.png", PUBLIC_KEY)
+        image_url2 = client.upload_image("daily_performance_bar.png", PUBLIC_KEY)
         post_resp = client.submit_post(
             updater_public_key_base58check=PUBLIC_KEY,
             body=body,
             parent_post_hash_hex=None,
             title="",
-            image_urls=[],
+            image_urls=[image_url1, image_url2],
             video_urls=[],
             post_extra_data={"Node": NODES[0]},
             min_fee_rate_nanos_per_kb=1000,
@@ -223,110 +296,6 @@ def daily_post():
         print(f"Error posting daily summary: {e}")
         return None
 
-def daily_scheduler():
-    logging.info("📅 DesoMonitor: Daily scheduler started")
-    # Start measurements immediately with a temporary parent post
-    logging.info("🚀 Creating initial daily post...")
-    parent_post_hash = daily_post()
-    if parent_post_hash:
-        logging.info("🔄 Starting initial measurements thread...")
-        threading.Thread(target=scheduled_measurements, args=(parent_post_hash,), daemon=True).start()
-    while True:
-        now = datetime.datetime.utcnow()
-        target = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        if now > target:
-            target += datetime.timedelta(days=1)
-        sleep_time = (target - now).total_seconds()
-        hours = int(sleep_time // 3600)
-        minutes = int((sleep_time % 3600) // 60)
-        logging.info(f"⏰ DesoMonitor: Next daily post in {hours}h {minutes}m at {target.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-        time.sleep(sleep_time)
-        # Create new daily post with accumulated data
-        new_parent_post_hash = daily_post()
-        if new_parent_post_hash:
-            parent_post_hash = new_parent_post_hash
-            logging.info("🔄 Daily post created, measurements continue under new post...")
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('desomonitor.log', encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    logging.info("🚀 DesoMonitor: Starting up...")
-    logging.info(f"📊 Configuration: {len(NODES)} nodes, {SCHEDULE_INTERVAL}s interval")
-    for i, node in enumerate(NODES, 1):
-        logging.info(f"   Node {i}: {node}")
-    logging.info("📅 Starting daily scheduler thread...")
-    threading.Thread(target=daily_scheduler, daemon=True).start()
-    logging.info("💤 DesoMonitor: Ready and running. Press Ctrl+C to stop.")
-    try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        logging.info("🛑 DesoMonitor: Shutting down gracefully...")
-        print("\nDesoMonitor stopped.")
-# --- Config loader ---
-def load_config():
-    try:
-        config = fetch_config_from_post(CONFIG_POST_HASH)
-        nodes = config.get("NODES", ["https://node.deso.org"])
-        schedule_interval = int(config.get("SCHEDULE_INTERVAL", 3600))
-        daily_post_time = config.get("DAILY_POST_TIME", "00:00")
-        post_tag = config.get("POST_TAG", "#desomonitormeasurement")
-        graph_days = int(config.get("GRAPH_DAYS", GRAPH_DAYS))
-        # Always prefer config post MODE over .env
-        mode = config.get("MODE")
-        if not mode or not isinstance(mode, str) or not mode.strip():
-            mode = os.getenv("MODE", "DAILY-CYCLE")
-        if isinstance(nodes, str):
-            nodes = [n.strip() for n in nodes.split(",") if n.strip()]
-        logging.info(f"DEBUG: Loaded NODES from config post: {nodes} (count={len(nodes)})")
-        return nodes, schedule_interval, daily_post_time, post_tag, graph_days, mode
-    except Exception as e:
-        print(f"Error loading config from chain: {e}. Falling back to .env config.")
-        nodes = os.getenv("DESO_NODES", "https://node.deso.org,https://desocialworld.desovalidator.net,https://safetynet.social")
-        nodes = [n.strip() for n in nodes.split(",") if n.strip()]
-        schedule_interval = int(os.getenv("SCHEDULE_INTERVAL", "3600"))
-        daily_post_time = os.getenv("DAILY_POST_TIME", "00:00")
-        post_tag = os.getenv("POST_TAG", "#desomonitormeasurement")
-        graph_days = int(os.getenv("GRAPH_DAYS", str(GRAPH_DAYS)))
-        return nodes, schedule_interval, daily_post_time, post_tag, graph_days
-
-# Initial config load
-config_result = load_config()
-if len(config_result) == 6:
-    NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, MODE = config_result
-else:
-    NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = config_result
-    MODE = "DAILY-CYCLE"
-# Data storage
-
-MEASUREMENTS_FILE = "measurements.json"
-measurements = {node: [] for node in NODES}
-
-def save_measurements():
-    """Save measurements to JSON, keeping only last 30 days for each node."""
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=30)
-    filtered = {}
-    for node, entries in measurements.items():
-        filtered_entries = []
-        for t, e in entries:
-            try:
-                dt = datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC")
-                if dt >= cutoff:
-                    filtered_entries.append((t, e))
-            except Exception:
-                # If timestamp is invalid, keep entry
-                filtered_entries.append((t, e))
-        filtered[node] = filtered_entries
-    with open(MEASUREMENTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(filtered, f, indent=2, ensure_ascii=False)
-    logging.info(f"💾 Measurements saved to {MEASUREMENTS_FILE} (clipped to 30 days)")
-
 
 def post_measurement(node, parent_post_hash):
     logging.info(f"🔄 DesoMonitor: Starting measurement post to {node}")
@@ -335,14 +304,14 @@ def post_measurement(node, parent_post_hash):
         timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         
         logging.info(f"📡 Connecting to {node}...")
-        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)
+        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)  # SEED_HEX from DESO_SEED_HEX
         
         # Create a temporary post first to measure response time
         logging.info(f"📝 Testing connection to {node}...")
         temp_comment = f"\U0001F310 Node check-in\nTesting connection...\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
         
         post_resp = client.submit_post(
-            updater_public_key_base58check=PUBLIC_KEY,
+            updater_public_key_base58check=PUBLIC_KEY,  # PUBLIC_KEY from DESO_PUBLIC_KEY
             body=temp_comment,
             parent_post_hash_hex=parent_post_hash,
             title="",
@@ -355,19 +324,22 @@ def post_measurement(node, parent_post_hash):
         )
         submit_resp = client.sign_and_submit_txn(post_resp)
         txn_hash = submit_resp.get("TxnHashHex")
+        post_time = time.time() - start  # Time to POST (submit transaction)
         
         logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash[:8]}...)")
         # Wait for commitment (confirmed reply) - increased timeout for slow networks
         try:
+            confirm_start = time.time()
             client.wait_for_commitment_with_timeout(txn_hash, 120.0)  # Increased to 2 minutes
+            confirm_time = time.time() - confirm_start  # Time to CONFIRM
             elapsed = time.time() - start
             
             # Now post the actual measurement with real timing as a reply
-            final_comment = f"\U0001F310 Node check-in RESULT\nElapsed: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
+            final_comment = f"\U0001F310 Node check-in RESULT\nPOST: {post_time:.2f} sec\nCONFIRM: {confirm_time:.2f} sec\nTotal: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
             
-            logging.info(f"📝 Posting final result: {elapsed:.2f}s...")
+            logging.info(f"📝 Posting final result: POST {post_time:.2f}s, CONFIRM {confirm_time:.2f}s, Total {elapsed:.2f}s...")
             final_resp = client.submit_post(
-                updater_public_key_base58check=PUBLIC_KEY,
+                updater_public_key_base58check=PUBLIC_KEY,  # PUBLIC_KEY from DESO_PUBLIC_KEY
                 body=final_comment,
                 parent_post_hash_hex=parent_post_hash,  # Reply to main thread
                 title="",
@@ -380,9 +352,9 @@ def post_measurement(node, parent_post_hash):
             )
             client.sign_and_submit_txn(final_resp)
             
-            logging.info(f"✅ SUCCESS: {node} responded in {elapsed:.2f} seconds")
+            logging.info(f"✅ SUCCESS: {node} - POST: {post_time:.2f}s, CONFIRM: {confirm_time:.2f}s, Total: {elapsed:.2f}s")
             print(final_comment)
-            measurements[node].append((timestamp, elapsed))
+            measurements[node].append((timestamp, {"post": post_time, "confirm": confirm_time, "total": elapsed}))
         except Exception as confirm_err:
             elapsed = time.time() - start
             logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
@@ -423,35 +395,18 @@ def scheduled_measurements(parent_post_hash):
         print(f"[DesoMonitor] FATAL: Measurement thread crashed: {thread_exc}")
 
 def generate_daily_graph(graph_days=7):
-    # After parsing measurement data, print debug info for each node
-    for node, times in node_times.items():
-        print(f"[DEBUG] Node: {node}, Measurements: {len(times)}")
-        for t, elapsed in times:
-            print(f"  Time: {t}, Elapsed: {elapsed}")
-    # Debug: print obscured SEED_HEX to confirm .env is read
-    if SEED_HEX:
-        obscured = SEED_HEX[:4] + "..." + SEED_HEX[-4:]
-        logging.info(f"[DEBUG] SEED_HEX loaded: {obscured} (len={len(SEED_HEX)})")
-    else:
-        logging.warning("[DEBUG] SEED_HEX is empty or not loaded!")
-    logging.info(f"📈 DesoMonitor: Generating performance graph for last {graph_days} days (from on-chain comments)...")
-    # Fetch the most recent daily post (with the tag and comments) for each of the previous graph_days days
+    # --- NEW: Parse measurement comments from blockchain for last graph_days ---
+    # (Legacy single-graph code removed; only stacked and bar graphs are produced)
+    import re
+    import numpy as np
     client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)
-    num_to_fetch = graph_days * 3 + 20  # Fetch enough to cover all days, even with extra posts
     url = f"{client.node_url}/api/v0/get-posts-for-public-key"
-    # Debug: print parsed measurement data for each node (after node_times is populated)
-    for node, times in node_times.items():
-        print(f"[DEBUG] Node: {node}, Measurements: {len(times)}")
-        for t, elapsed in times:
-            print(f"  Time: {t}, Elapsed: {elapsed}")
-    payload = {"PublicKeyBase58Check": PUBLIC_KEY, "NumToFetch": num_to_fetch}
+    payload = {"PublicKeyBase58Check": PUBLIC_KEY, "NumToFetch": graph_days * 3 + 20}
     resp = requests.post(url, json=payload)
     resp.raise_for_status()
     posts = resp.json().get("Posts", [])
-    # Group daily posts by UTC date, pick most recent with comments per day
     from collections import defaultdict
     daily_posts_by_date = defaultdict(list)
-    post_comments_by_hash = {}
     for post in posts:
         if POST_TAG in post.get("Body", ""):
             post_time = post.get("TimestampNanos")
@@ -459,9 +414,8 @@ def generate_daily_graph(graph_days=7):
                 t = datetime.datetime.utcfromtimestamp(int(post_time) / 1e9)
                 date_str = t.strftime("%Y-%m-%d")
                 daily_posts_by_date[date_str].append((t, post))
-    # For each of the last graph_days days, pick the most recent daily post with comments
-    today = datetime.datetime.utcnow().date()
     selected_daily_posts = []
+    today = datetime.datetime.utcnow().date()
     for i in range(graph_days):
         day = today - datetime.timedelta(days=i)
         date_str = day.strftime("%Y-%m-%d")
@@ -475,82 +429,136 @@ def generate_daily_graph(graph_days=7):
             comments = resp_single.json().get("PostFound", {}).get("Comments", [])
             if comments:
                 selected_daily_posts.append((post, comments))
-                break  # Only the most recent with comments for this day
-    if not selected_daily_posts:
-        logging.error("No recent daily posts with comments found for graph generation!")
-        return
-    # Aggregate measurement comments from all selected daily posts
+                break
     measurement_comments = []
-    print("[DesoMonitor] Selected daily post dates:", [post.get('TimestampNanos') for post, _ in selected_daily_posts])
     for post, comments in selected_daily_posts:
         measurement_comments.extend([c for c in comments if POST_TAG in c.get("Body", "")])
-    logging.info(f"Found {len(measurement_comments)} measurement comments from {len(selected_daily_posts)} daily posts for GRAPH_DAYS={graph_days}")
-    print(f"[DesoMonitor] Found {len(measurement_comments)} measurement comments from {len(selected_daily_posts)} daily posts for GRAPH_DAYS={graph_days}")
-    print("[DesoMonitor] First 5 measurement comment bodies:")
-    for c in measurement_comments[:5]:
-        print(c.get('Body', ''))
-    # Parse measurement data
-    import re
+    logging.info(f"🔎 Found {len(measurement_comments)} on-chain measurement comments for last {graph_days} days.")
     node_times = {node: [] for node in NODES}
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=graph_days)
+    node_times_post = {node: [] for node in NODES}
+    node_times_confirm = {node: [] for node in NODES}
     for c in measurement_comments:
         body = c.get("Body", "")
         node = None
-        elapsed = None
+        post_time = None
+        confirm_time = None
         timestamp = None
-        # Try to extract node, elapsed, timestamp from body
         m_node = re.search(r"Node: (.+)", body)
-        m_elapsed = re.search(r"Elapsed: ([0-9.]+) sec", body)
+        m_post = re.search(r"POST: ([0-9.]+) sec", body)
+        m_confirm = re.search(r"CONFIRM: ([0-9.]+) sec", body)
+        m_elapsed = re.search(r"Elapsed: ([0-9.]+) sec", body)  # OLD FORMAT
         m_time = re.search(r"Timestamp: ([0-9\-: ]+ UTC)", body)
         if m_node:
             node = m_node.group(1).strip()
-        if m_elapsed:
-            elapsed = float(m_elapsed.group(1))
+        if m_post:
+            post_time = float(m_post.group(1))
+        if m_confirm:
+            confirm_time = float(m_confirm.group(1))
+        # Backward compatibility: if no POST/CONFIRM but have Elapsed, estimate split
+        if m_elapsed and post_time is None and confirm_time is None:
+            elapsed_time = float(m_elapsed.group(1))
+            # Estimate: ~10% for POST, ~90% for CONFIRM (typical blockchain behavior)
+            post_time = elapsed_time * 0.1
+            confirm_time = elapsed_time * 0.9
         if m_time:
             timestamp = m_time.group(1).strip()
-        if node in node_times and elapsed is not None and timestamp is not None:
+        if node in node_times and timestamp is not None:
             try:
                 t = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S UTC")
                 if t >= cutoff:
-                    node_times[node].append((t, elapsed))
-            except Exception:
-                continue
-    # Debug output for parsed measurement data
-    for node, times in node_times.items():
-        print(f"[DEBUG] Node: {node}, Measurements: {len(times)}")
-        for t, elapsed in times:
-            print(f"  Time: {t}, Elapsed: {elapsed}")
-    # --- Restored original time series graph ---
-    plt.figure(figsize=(14, 8))
+                    if post_time is not None:
+                        node_times_post[node].append((t, post_time))
+                        node_times[node].append((t, post_time))  # Keep for backward compatibility
+                    if confirm_time is not None:
+                        node_times_confirm[node].append((t, confirm_time))
+                    logging.info(f"📥 Measurement used for graph: node={node}, timestamp={timestamp}, POST={post_time}s, CONFIRM={confirm_time}s")
+            except Exception as ex:
+                logging.debug(f"⚠️ Skipping invalid measurement comment: {body} (error: {ex})")
+    # --- New: Stacked time series plots for POST and CONFIRM speeds ---
+    import matplotlib.dates as mdates
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
     colors = plt.cm.tab10(np.linspace(0, 1, len(NODES)))
+    # POST Speed (top)
     for i, node in enumerate(NODES):
-        times = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") for t, e in measurements[node] if e is not None]
-        elapsed = [e for t, e in measurements[node] if e is not None]
+        times = [t for t, e in node_times_post[node] if e is not None]
+        elapsed = [e for t, e in node_times_post[node] if e is not None]
         node_name = node.replace('https://', '').replace('http://', '')
-        plt.plot(times, elapsed, label=node_name, color=colors[i], linewidth=1.5, marker='o', markersize=2, alpha=0.8)
-        logging.info(f"📊 Graph data for {node}: {len(elapsed)} measurements")
-    plt.xlabel("Time (UTC)", fontsize=12)
-    plt.ylabel("Response Time (seconds)", fontsize=12)
-    plt.title("DeSo Node Performance - 24 Hour Monitoring", fontsize=14, fontweight='bold')
-    if len(NODES) > 6:
-        plt.legend(fontsize=9, ncol=2, loc='upper left', bbox_to_anchor=(1.02, 1))
-    else:
-        plt.legend(fontsize=11)
-    plt.grid(True, alpha=0.3)
+        ax1.scatter(times, elapsed, label=node_name, color=colors[i], s=30, alpha=0.7)
+        logging.info(f"📊 POST graph data for {node}: {len(elapsed)} measurements")
+    ax1.set_ylabel("POST Speed (seconds)", fontsize=12)
+    ax1.set_title("DeSo Node POST Speed (Transaction Submission)", fontsize=14, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=10, ncol=2, loc='upper left', bbox_to_anchor=(1.02, 1))
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+    # CONFIRM Speed (bottom)
+    for i, node in enumerate(NODES):
+        times = [t for t, e in node_times_confirm[node] if e is not None]
+        elapsed = [e for t, e in node_times_confirm[node] if e is not None]
+        node_name = node.replace('https://', '').replace('http://', '')
+        ax2.scatter(times, elapsed, label=node_name, color=colors[i], s=30, alpha=0.7)
+        logging.info(f"📊 CONFIRM graph data for {node}: {len(elapsed)} measurements")
+    ax2.set_ylabel("CONFIRMATION Speed (seconds)", fontsize=12)
+    ax2.set_title("DeSo Node CONFIRMATION Speed (Transaction Commitment - Full Nodes Only)", fontsize=14, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=10, ncol=2, loc='upper left', bbox_to_anchor=(1.02, 1))
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.set_xlabel("Time (UTC)", fontsize=12)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.gca().spines['top'].set_visible(False)
-    plt.gca().spines['right'].set_visible(False)
-    plt.savefig("daily_performance.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    logging.info("📈 Daily performance graph saved as 'daily_performance.png'")
+    plt.savefig("daily_performance_stacked.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    logging.info("📈 Stacked POST/CONFIRM graph saved as 'daily_performance_stacked.png'")
+
+    # --- Bar chart: POST vs CONFIRM Speed (Median) ---
+    medians_post = []
+    medians_confirm = []
+    node_labels = []
+    for node in NODES:
+        post_times = [e for t, e in node_times_post[node] if e is not None]
+        confirm_times = [e for t, e in node_times_confirm[node] if e is not None]
+        if post_times or confirm_times:
+            medians_post.append(np.median(post_times) if post_times else 0)
+            medians_confirm.append(np.median(confirm_times) if confirm_times else 0)
+            node_labels.append(node.replace('https://', '').replace('http://', ''))
+    y_pos = np.arange(len(node_labels))
+    bar_height = 0.35
+    fig2, ax = plt.subplots(figsize=(13, max(5, len(node_labels) * 0.8)))
+    bars1 = ax.barh(y_pos - bar_height/2, medians_post, bar_height, label='POST Speed', color='#3498db')
+    bars2 = ax.barh(y_pos + bar_height/2, medians_confirm, bar_height, label='CONFIRM Speed', color='#27ae60')
+    for i, (bar, median) in enumerate(zip(bars1, medians_post)):
+        width = bar.get_width()
+        ax.text(width + 0.1, bar.get_y() + bar.get_height()/2, f'{median:.1f}s', ha='left', va='center', fontsize=10)
+    for i, (bar, median) in enumerate(zip(bars2, medians_confirm)):
+        width = bar.get_width()
+        ax.text(width + 0.1, bar.get_y() + bar.get_height()/2, f'{median:.1f}s', ha='left', va='center', fontsize=10)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(node_labels, fontsize=12)
+    ax.set_xlabel('Response Time (seconds)', fontsize=12)
+    ax.set_title('DeSo Node Performance - POST vs CONFIRMATION Speed (Median)', fontsize=15, fontweight='bold', pad=20)
+    ax.legend(fontsize=12)
+    ax.grid(True, axis='x', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("daily_performance_bar.png", dpi=300, bbox_inches='tight')
+    plt.close(fig2)
+    logging.info("📊 Bar chart saved as 'daily_performance_bar.png'")
 
 def generate_gauge():
     logging.info("🎯 Generating sample daily performance gauge...")
     import numpy as np
     node_data = []
     for node in NODES:
-        elapsed = [e for t, e in measurements[node] if e is not None]
+        # Extract total elapsed times from dict format
+        elapsed = []
+        for t, e in measurements[node]:
+            if isinstance(e, dict) and e.get("total") is not None:
+                elapsed.append(e["total"])
+            elif isinstance(e, (int, float)) and e is not None:
+                elapsed.append(float(e))
+        
         if elapsed:
             median = np.median(elapsed)
             node_name = node.replace('https://', '').replace('http://', '')
@@ -609,15 +617,16 @@ def daily_post():
     try:
         save_measurements()
         logging.info("📤 Posting daily summary to DeSo...")
-        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])
-        # Upload the graph image and get the URL
-        image_url = client.upload_image("daily_performance.png", PUBLIC_KEY)
+        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])  # SEED_HEX from DESO_SEED_HEX
+        # Upload both new graph images and get their URLs
+        image_url1 = client.upload_image("daily_performance_stacked.png", PUBLIC_KEY)
+        image_url2 = client.upload_image("daily_performance_bar.png", PUBLIC_KEY)
         post_resp = client.submit_post(
             updater_public_key_base58check=PUBLIC_KEY,
             body=body,
             parent_post_hash_hex=None,
             title="",
-            image_urls=[image_url],
+            image_urls=[image_url1, image_url2],
             video_urls=[],
             post_extra_data={"Node": NODES[0]},
             min_fee_rate_nanos_per_kb=1000,
@@ -659,7 +668,11 @@ def daily_scheduler():
             logging.info(f"⏰ DesoMonitor: Waiting {int(sleep_to_post//60)}m {int(sleep_to_post%60)}s to post daily summary at {target.strftime('%Y-%m-%d %H:%M:%S UTC')}")
             time.sleep(sleep_to_post)
         # Re-read config at daily restart
-        NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = load_config()
+        config_result = load_config()
+        if len(config_result) == 6:
+            NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, MODE = config_result
+        else:
+            NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = config_result
         # Re-init measurements for new/removed nodes
         for node in NODES:
             if node not in measurements:
@@ -678,8 +691,23 @@ if __name__ == "__main__":
     logging.info(f"📊 Configuration: {len(NODES)} nodes, {SCHEDULE_INTERVAL}s interval")
     for i, node in enumerate(NODES, 1):
         logging.info(f"   Node {i}: {node}")
+
+    # --- Create or find today's daily post (with graph of last GRAPH_DAYS measurements) ---
+    logging.info("📋 Creating today's daily summary post (with graph)...")
+    parent_post_hash = daily_post()  # This will generate the graph and post the daily summary
+    if not parent_post_hash:
+        logging.error("❌ Could not create or find today's daily post. Exiting.")
+        exit(1)
+    logging.info(f"🧵 Using parent_post_hash for measurements: {parent_post_hash}")
+
+    # --- Start measurement posting thread immediately ---
+    logging.info("📡 Starting scheduled measurements thread...")
+    threading.Thread(target=scheduled_measurements, args=(parent_post_hash,), daemon=True).start()
+
+    # --- Start daily scheduler thread for daily rollovers ---
     logging.info("📅 Starting daily scheduler thread...")
     threading.Thread(target=daily_scheduler, daemon=True).start()
+
     logging.info("💤 DesoMonitor: Ready and running. Press Ctrl+C to stop.")
     try:
         while True:
