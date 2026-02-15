@@ -176,10 +176,9 @@ def post_measurement(node, parent_post_hash):
             client.wait_for_commitment_with_timeout(txn_hash, 120.0)  # Increased to 2 minutes
             confirm_time = time.time() - confirm_start  # Time to CONFIRM
             elapsed = time.time() - start
-            
+
             # Now post the actual measurement with real timing as a reply
             final_comment = f"\U0001F310 Node check-in RESULT\nPOST: {post_time:.2f} sec\nCONFIRM: {confirm_time:.2f} sec\nTotal: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
-            
             logging.info(f"📝 Posting final result: POST {post_time:.2f}s, CONFIRM {confirm_time:.2f}s, Total {elapsed:.2f}s...")
             final_resp = client.submit_post(
                 updater_public_key_base58check=PUBLIC_KEY,  # PUBLIC_KEY from DESO_PUBLIC_KEY
@@ -195,7 +194,8 @@ def post_measurement(node, parent_post_hash):
             )
             final_submit_resp = client.sign_and_submit_txn(final_resp)
             final_txn_hash = final_submit_resp.get("TxnHashHex")
-            logging.info(f"✅ SUCCESS: {node} - POST: {post_time:.2f}s, CONFIRM: {confirm_time:.2f}s, Total: {elapsed:.2f}s")
+            # Only log SUCCESS after the hash is available
+            logging.info(f"✅ SUCCESS: {node} - POST: {post_time:.2f}s, CONFIRM: {confirm_time:.2f}s, Total: {elapsed:.2f}s | Measurement comment TxnHash: {final_txn_hash}")
             print(final_comment)
             print(f"[DesoMonitor] Measurement comment submitted. Full TxnHash: {final_txn_hash}")
             measurements[node].append((timestamp, {"post": post_time, "confirm": confirm_time, "total": elapsed, "comment_txn_hash": final_txn_hash}))
@@ -329,7 +329,7 @@ def post_measurement(node, parent_post_hash):
         txn_hash = submit_resp.get("TxnHashHex")
         post_time = time.time() - start  # Time to POST (submit transaction)
         
-        logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash[:8]}...)")
+        logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash})")
         # Wait for commitment (confirmed reply) - increased timeout for slow networks
         try:
             confirm_start = time.time()
@@ -800,7 +800,6 @@ if __name__ == "__main__":
             logging.info(f"[DesoMonitor] Starting measurement cycle #{measurement_count} with parent_post_hash={current_hash}")
             for i, node in enumerate(NODES, 1):
                 logging.info(f"🔍 DesoMonitor: Processing node {i}/{len(NODES)}: {node} (parent_post_hash={current_hash})")
-                print(f"[DesoMonitor] Posting measurement for node {node} (parent_post_hash={current_hash})")
                 try:
                     post_measurement(node, current_hash)
                 except Exception as e:
