@@ -6,6 +6,7 @@ import json
 import time
 import logging
 import threading
+from threading import Lock
 import datetime
 import requests
 import matplotlib
@@ -167,7 +168,8 @@ def post_measurement(node, parent_post_hash):
         txn_hash = submit_resp.get("TxnHashHex")
         post_time = time.time() - start  # Time to POST (submit transaction)
         
-        logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash[:8]}...)")
+        logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash})")
+        print(f"[DesoMonitor] Measurement post submitted. Full TxnHash: {txn_hash}")
         # Wait for commitment (confirmed reply) - increased timeout for slow networks
         try:
             confirm_start = time.time()
@@ -191,11 +193,12 @@ def post_measurement(node, parent_post_hash):
                 is_hidden=False,
                 in_tutorial=False
             )
-            client.sign_and_submit_txn(final_resp)
-            
+            final_submit_resp = client.sign_and_submit_txn(final_resp)
+            final_txn_hash = final_submit_resp.get("TxnHashHex")
             logging.info(f"✅ SUCCESS: {node} - POST: {post_time:.2f}s, CONFIRM: {confirm_time:.2f}s, Total: {elapsed:.2f}s")
             print(final_comment)
-            measurements[node].append((timestamp, {"post": post_time, "confirm": confirm_time, "total": elapsed}))
+            print(f"[DesoMonitor] Measurement comment submitted. Full TxnHash: {final_txn_hash}")
+            measurements[node].append((timestamp, {"post": post_time, "confirm": confirm_time, "total": elapsed, "comment_txn_hash": final_txn_hash}))
             save_measurements()
         except Exception as confirm_err:
             elapsed = time.time() - start
@@ -547,18 +550,70 @@ def generate_daily_graph(graph_days=7):
     logging.info("📊 Bar chart saved as 'daily_performance_bar.png'")
 
 def generate_gauge():
-    logging.info("🎯 Generating sample daily performance gauge...")
+    logging.info("🎯 Generating daily performance gauge from on-chain data only...")
+    import re
     import numpy as np
+    client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)
+    url = f"{client.node_url}/api/v0/get-posts-for-public-key"
+    payload = {"PublicKeyBase58Check": PUBLIC_KEY, "NumToFetch": GRAPH_DAYS * 3 + 20}
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    posts = resp.json().get("Posts", [])
+    from collections import defaultdict
+    daily_posts_by_date = defaultdict(list)
+    for post in posts:
+        if POST_TAG in post.get("Body", ""):
+            post_time = post.get("TimestampNanos")
+            if post_time:
+                t = datetime.datetime.utcfromtimestamp(int(post_time) / 1e9)
+                date_str = t.strftime("%Y-%m-%d")
+                daily_posts_by_date[date_str].append((t, post))
+    selected_daily_posts = []
+    today = datetime.datetime.utcnow().date()
+    for i in range(GRAPH_DAYS):
+        day = today - datetime.timedelta(days=i)
+        date_str = day.strftime("%Y-%m-%d")
+        posts_for_day = sorted(daily_posts_by_date.get(date_str, []), key=lambda x: x[0], reverse=True)
+        for t, post in posts_for_day:
+            daily_post_hash = post.get("PostHashHex")
+            url_single = f"{client.node_url}/api/v0/get-single-post"
+            payload_single = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": 100}
+            resp_single = requests.post(url_single, json=payload_single)
+            resp_single.raise_for_status()
+            comments = resp_single.json().get("PostFound", {}).get("Comments", [])
+            if comments:
+                selected_daily_posts.append((post, comments))
+                break
+    measurement_comments = []
+    for post, comments in selected_daily_posts:
+        measurement_comments.extend([c for c in comments if POST_TAG in c.get("Body", "")])
+    logging.info(f"🔎 Found {len(measurement_comments)} on-chain measurement comments for last {GRAPH_DAYS} days (for gauge graph).")
+    node_times = {node: [] for node in NODES}
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=GRAPH_DAYS)
+    for c in measurement_comments:
+        body = c.get("Body", "")
+        node = None
+        total_time = None
+        timestamp = None
+        m_node = re.search(r"Node: (.+)", body)
+        m_total = re.search(r"Total: ([0-9.]+) sec", body)
+        m_time = re.search(r"Timestamp: ([0-9\-: ]+ UTC)", body)
+        if m_node:
+            node = m_node.group(1).strip()
+        if m_total:
+            total_time = float(m_total.group(1))
+        if m_time:
+            timestamp = m_time.group(1).strip()
+        if node in node_times and timestamp is not None and total_time is not None:
+            try:
+                t = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S UTC")
+                if t >= cutoff:
+                    node_times[node].append((t, total_time))
+            except Exception as ex:
+                logging.debug(f"⚠️ Skipping invalid measurement comment: {body} (error: {ex})")
     node_data = []
     for node in NODES:
-        # Extract total elapsed times from dict format
-        elapsed = []
-        for t, e in measurements[node]:
-            if isinstance(e, dict) and e.get("total") is not None:
-                elapsed.append(e["total"])
-            elif isinstance(e, (int, float)) and e is not None:
-                elapsed.append(float(e))
-        
+        elapsed = [e for t, e in node_times[node] if e is not None]
         if elapsed:
             median = np.median(elapsed)
             node_name = node.replace('https://', '').replace('http://', '')
@@ -694,19 +749,123 @@ if __name__ == "__main__":
 
     # --- Create or find today's daily post (with graph of last GRAPH_DAYS measurements) ---
     logging.info("📋 Creating today's daily summary post (with graph)...")
-    parent_post_hash = daily_post()  # This will generate the graph and post the daily summary
-    if not parent_post_hash:
-        logging.error("❌ Could not create or find today's daily post. Exiting.")
-        exit(1)
-    logging.info(f"🧵 Using parent_post_hash for measurements: {parent_post_hash}")
 
-    # --- Start measurement posting thread immediately ---
+    # --- Shared parent_post_hash and lock for thread safety ---
+    parent_post_hash = None
+    parent_post_hash_lock = Lock()
+
+    def get_parent_post_hash():
+        with parent_post_hash_lock:
+            return parent_post_hash
+
+    def set_parent_post_hash(new_hash):
+        global parent_post_hash
+        with parent_post_hash_lock:
+            parent_post_hash = new_hash
+
+    # --- Start measurement posting thread (uses latest parent_post_hash) ---
+    def measurement_thread():
+        logging.info("[DesoMonitor] Measurement thread started.")
+        measurement_count = 0
+        last_config = None
+        while True:
+            # Always reload config and parent hash before each cycle
+            config_result = load_config()
+            if len(config_result) == 6:
+                nodes, schedule_interval, daily_post_time, post_tag, graph_days, mode = config_result
+            else:
+                nodes, schedule_interval, daily_post_time, post_tag, graph_days = config_result
+                mode = "DAILY-CYCLE"
+            # Update globals for this cycle
+            global NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, MODE
+            NODES = nodes
+            SCHEDULE_INTERVAL = schedule_interval
+            DAILY_POST_TIME = daily_post_time
+            POST_TAG = post_tag
+            GRAPH_DAYS = graph_days
+            MODE = mode
+            # Ensure measurements dict is up to date
+            for node in NODES:
+                if node not in measurements:
+                    measurements[node] = []
+            for node in list(measurements.keys()):
+                if node not in NODES:
+                    del measurements[node]
+            current_hash = get_parent_post_hash()
+            if not current_hash:
+                logging.warning("Waiting for parent_post_hash to be set...")
+                time.sleep(10)
+                continue
+            measurement_count += 1
+            logging.info(f"[DesoMonitor] Starting measurement cycle #{measurement_count} with parent_post_hash={current_hash}")
+            for i, node in enumerate(NODES, 1):
+                logging.info(f"🔍 DesoMonitor: Processing node {i}/{len(NODES)}: {node} (parent_post_hash={current_hash})")
+                print(f"[DesoMonitor] Posting measurement for node {node} (parent_post_hash={current_hash})")
+                try:
+                    post_measurement(node, current_hash)
+                except Exception as e:
+                    logging.error(f"❌ ERROR: Exception during monitoring node {node}: {e}")
+                    print(f"[DesoMonitor] ERROR posting measurement for node {node}: {e}")
+                    measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
+            next_run = datetime.datetime.utcnow() + datetime.timedelta(seconds=SCHEDULE_INTERVAL)
+            logging.info(f"💤 DesoMonitor: Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
+            print(f"[DesoMonitor] Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
+            time.sleep(SCHEDULE_INTERVAL)
+
     logging.info("📡 Starting scheduled measurements thread...")
-    threading.Thread(target=scheduled_measurements, args=(parent_post_hash,), daemon=True).start()
+    threading.Thread(target=measurement_thread, daemon=True).start()
 
     # --- Start daily scheduler thread for daily rollovers ---
+    def daily_scheduler_with_update():
+        global NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, MODE, measurements
+        logging.info("📅 DesoMonitor: Daily scheduler started")
+        while True:
+            now = datetime.datetime.utcnow()
+            target = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if now > target:
+                target += datetime.timedelta(days=1)
+            graph_time = target - datetime.timedelta(minutes=5)
+            sleep_time = (graph_time - now).total_seconds()
+            if sleep_time > 0:
+                logging.info(f"⏰ DesoMonitor: Next graph generation in {int(sleep_time//60)}m {int(sleep_time%60)}s at {graph_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+                time.sleep(sleep_time)
+            generate_daily_graph(GRAPH_DAYS)
+            generate_gauge()
+            now = datetime.datetime.utcnow()
+            sleep_to_post = (target - now).total_seconds()
+            if sleep_to_post > 0:
+                logging.info(f"⏰ DesoMonitor: Waiting {int(sleep_to_post//60)}m {int(sleep_to_post%60)}s to post daily summary at {target.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+                time.sleep(sleep_to_post)
+            # Reload config and update all globals for the new day
+            config_result = load_config()
+            if len(config_result) == 6:
+                NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS, MODE = config_result
+            else:
+                NODES, SCHEDULE_INTERVAL, DAILY_POST_TIME, POST_TAG, GRAPH_DAYS = config_result
+                MODE = "DAILY-CYCLE"
+            for node in NODES:
+                if node not in measurements:
+                    measurements[node] = []
+            for node in list(measurements.keys()):
+                if node not in NODES:
+                    del measurements[node]
+            # Create new daily post and update parent_post_hash
+            new_parent_post_hash = daily_post()
+            if new_parent_post_hash:
+                set_parent_post_hash(new_parent_post_hash)
+                logging.info("🔄 Daily post created, measurements continue under new post...")
+
     logging.info("📅 Starting daily scheduler thread...")
-    threading.Thread(target=daily_scheduler, daemon=True).start()
+    threading.Thread(target=daily_scheduler_with_update, daemon=True).start()
+
+    # --- Initial daily post and set parent_post_hash ---
+    logging.info("📋 Creating today's daily summary post (with graph)...")
+    first_parent_post_hash = daily_post()
+    if not first_parent_post_hash:
+        logging.error("❌ Could not create or find today's daily post. Exiting.")
+        exit(1)
+    set_parent_post_hash(first_parent_post_hash)
+    logging.info(f"🧵 Using parent_post_hash for measurements: {first_parent_post_hash}")
 
     logging.info("💤 DesoMonitor: Ready and running. Press Ctrl+C to stop.")
     try:
