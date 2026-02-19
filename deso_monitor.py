@@ -28,6 +28,10 @@ logging.basicConfig(
     ]
 )
 
+# --- Version indicator ---
+DESOMONITOR_VERSION = "3.0"
+logging.info(f"DesoMonitor version {DESOMONITOR_VERSION} starting up...")
+
 SEED_HEX = os.getenv("DESO_SEED_HEX", "").replace('"','').replace("'",'').strip()  # from .env: DESO_SEED_HEX
 PUBLIC_KEY = os.getenv("DESO_PUBLIC_KEY", "").replace('"','').replace("'",'').strip()  # from .env: DESO_PUBLIC_KEY
 CONFIG_POST_HASH = os.getenv("CONFIG_POST_HASH", "91522722c35f6b38588f059723ae3a401a92ae7a09826c6a987bf511d02f21aa")
