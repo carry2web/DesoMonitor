@@ -419,6 +419,12 @@ def generate_daily_graph(graph_days=7):
                 daily_posts_by_date[date_str].append((t, post))
     selected_daily_posts = []
     today = datetime.datetime.utcnow().date()
+    # Dynamically determine expected number of measurement comments
+    nodes = NODES
+    schedule_interval = SCHEDULE_INTERVAL
+    per_node_per_day = int(24 * 60 * 60 / schedule_interval)
+    expected_comments = len(nodes) * per_node_per_day
+    comment_limit = int(expected_comments * 1.2)  # 20% buffer
     for i in range(graph_days):
         day = today - datetime.timedelta(days=i)
         date_str = day.strftime("%Y-%m-%d")
@@ -426,7 +432,7 @@ def generate_daily_graph(graph_days=7):
         for t, post in posts_for_day:
             daily_post_hash = post.get("PostHashHex")
             url_single = f"{client.node_url}/api/v0/get-single-post"
-            payload_single = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": 100}
+            payload_single = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": comment_limit}
             resp_single = requests.post(url_single, json=payload_single)
             resp_single.raise_for_status()
             comments = resp_single.json().get("PostFound", {}).get("Comments", [])
@@ -570,6 +576,12 @@ def generate_gauge():
                 daily_posts_by_date[date_str].append((t, post))
     selected_daily_posts = []
     today = datetime.datetime.utcnow().date()
+    # Dynamically determine expected number of measurement comments
+    nodes = NODES
+    schedule_interval = SCHEDULE_INTERVAL
+    per_node_per_day = int(24 * 60 * 60 / schedule_interval)
+    expected_comments = len(nodes) * per_node_per_day
+    comment_limit = int(expected_comments * 1.2)  # 20% buffer
     for i in range(GRAPH_DAYS):
         day = today - datetime.timedelta(days=i)
         date_str = day.strftime("%Y-%m-%d")
@@ -577,7 +589,7 @@ def generate_gauge():
         for t, post in posts_for_day:
             daily_post_hash = post.get("PostHashHex")
             url_single = f"{client.node_url}/api/v0/get-single-post"
-            payload_single = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": 100}
+            payload_single = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": comment_limit}
             resp_single = requests.post(url_single, json=payload_single)
             resp_single.raise_for_status()
             comments = resp_single.json().get("PostFound", {}).get("Comments", [])
@@ -673,15 +685,16 @@ def daily_post():
         save_measurements()
         logging.info("📤 Posting daily summary to DeSo...")
         client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])  # SEED_HEX from DESO_SEED_HEX
-        # Upload both new graph images and get their URLs
+        # Upload all graph images and get their URLs
         image_url1 = client.upload_image("daily_performance_stacked.png", PUBLIC_KEY)
         image_url2 = client.upload_image("daily_performance_bar.png", PUBLIC_KEY)
+        image_url3 = client.upload_image("daily_performance.png", PUBLIC_KEY)
         post_resp = client.submit_post(
             updater_public_key_base58check=PUBLIC_KEY,
             body=body,
             parent_post_hash_hex=None,
             title="",
-            image_urls=[image_url1, image_url2],
+            image_urls=[image_url1, image_url2, image_url3],
             video_urls=[],
             post_extra_data={"Node": NODES[0]},
             min_fee_rate_nanos_per_kb=1000,
