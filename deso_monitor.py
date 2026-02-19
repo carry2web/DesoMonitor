@@ -488,12 +488,12 @@ def generate_daily_graph(graph_days=7):
     import matplotlib.dates as mdates
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
     colors = plt.cm.tab10(np.linspace(0, 1, len(NODES)))
-    # POST Speed (top)
+    # POST Speed (top) - line+marker plot
     for i, node in enumerate(NODES):
         times = [t for t, e in node_times_post[node] if e is not None]
         elapsed = [e for t, e in node_times_post[node] if e is not None]
         node_name = node.replace('https://', '').replace('http://', '')
-        ax1.scatter(times, elapsed, label=node_name, color=colors[i], s=30, alpha=0.7)
+        ax1.plot(times, elapsed, marker='o', markersize=4, linestyle='-', label=node_name, color=colors[i])
         logging.info(f"📊 POST graph data for {node}: {len(elapsed)} measurements")
     ax1.set_ylabel("POST Speed (seconds)", fontsize=12)
     ax1.set_title("DeSo Node POST Speed (Transaction Submission)", fontsize=14, fontweight='bold')
@@ -501,12 +501,12 @@ def generate_daily_graph(graph_days=7):
     ax1.legend(fontsize=10, ncol=2, loc='upper left', bbox_to_anchor=(1.02, 1))
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
-    # CONFIRM Speed (bottom)
+    # CONFIRM Speed (bottom) - line+marker plot
     for i, node in enumerate(NODES):
         times = [t for t, e in node_times_confirm[node] if e is not None]
         elapsed = [e for t, e in node_times_confirm[node] if e is not None]
         node_name = node.replace('https://', '').replace('http://', '')
-        ax2.scatter(times, elapsed, label=node_name, color=colors[i], s=30, alpha=0.7)
+        ax2.plot(times, elapsed, marker='o', markersize=4, linestyle='-', label=node_name, color=colors[i])
         logging.info(f"📊 CONFIRM graph data for {node}: {len(elapsed)} measurements")
     ax2.set_ylabel("CONFIRMATION Speed (seconds)", fontsize=12)
     ax2.set_title("DeSo Node CONFIRMATION Speed (Transaction Commitment - Full Nodes Only)", fontsize=14, fontweight='bold')
@@ -518,9 +518,9 @@ def generate_daily_graph(graph_days=7):
     ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig("daily_performance_stacked.png", dpi=300, bbox_inches='tight')
+    plt.savefig("daily_performance.png", dpi=300, bbox_inches='tight')
     plt.close(fig)
-    logging.info("📈 Stacked POST/CONFIRM graph saved as 'daily_performance_stacked.png'")
+    logging.info("📈 daily_performance.png saved as line+marker plot")
 
     # --- Bar chart: POST vs CONFIRM Speed (Median) ---
     medians_post = []
