@@ -1,5 +1,3 @@
-
-
 # --- Imports ---
 import os
 import json
@@ -32,7 +30,7 @@ logging.basicConfig(
 )
 
 # --- Version indicator ---
-DESOMONITOR_VERSION = "3.0"
+DESOMONITOR_VERSION = "3.2"
 logging.info(f"DesoMonitor version {DESOMONITOR_VERSION} starting up...")
 
 SEED_HEX = os.getenv("DESO_SEED_HEX", "").replace('"','').replace("'",'').strip()  # from .env: DESO_SEED_HEX
@@ -154,160 +152,6 @@ def post_measurement(node, parent_post_hash):
     start = time.time()
     try:
         timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        logging.info(f"📡 Connecting to {node}...")
-        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)  # SEED_HEX from DESO_SEED_HEX
-        # Create a temporary post first to measure response time
-        logging.info(f"📝 Testing connection to {node}...")
-        temp_comment = f"\U0001F310 Node check-in\nTesting connection...\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
-        post_resp = client.submit_post(
-            updater_public_key_base58check=PUBLIC_KEY,  # PUBLIC_KEY from DESO_PUBLIC_KEY
-            body=temp_comment,
-            parent_post_hash_hex=parent_post_hash,
-            title="",
-            image_urls=[],
-            video_urls=[],
-            post_extra_data={"Node": node},
-            min_fee_rate_nanos_per_kb=1000,
-            is_hidden=False,
-            in_tutorial=False
-        )
-        submit_resp = client.sign_and_submit_txn(post_resp)
-        txn_hash = submit_resp.get("TxnHashHex")
-        post_time = time.time() - start  # Time to POST (submit transaction)
-        
-        logging.info(f"⏳ Waiting for commitment from {node} (TxnHash: {txn_hash})")
-        print(f"[DesoMonitor] Measurement post submitted. Full TxnHash: {txn_hash}")
-        # Wait for commitment (confirmed reply) - increased timeout for slow networks
-        try:
-            confirm_start = time.time()
-            client.wait_for_commitment_with_timeout(txn_hash, 120.0)  # Increased to 2 minutes
-            confirm_time = time.time() - confirm_start  # Time to CONFIRM
-            elapsed = time.time() - start
-
-            # Now post the actual measurement with real timing as a reply
-            final_comment = f"\U0001F310 Node check-in RESULT\nPOST: {post_time:.2f} sec\nCONFIRM: {confirm_time:.2f} sec\nTotal: {elapsed:.2f} sec\nTimestamp: {timestamp}\nNode: {node}\n{POST_TAG}"
-            logging.info(f"📝 Posting final result: POST {post_time:.2f}s, CONFIRM {confirm_time:.2f}s, Total {elapsed:.2f}s...")
-            final_resp = client.submit_post(
-                updater_public_key_base58check=PUBLIC_KEY,  # PUBLIC_KEY from DESO_PUBLIC_KEY
-                body=final_comment,
-                parent_post_hash_hex=parent_post_hash,  # Reply to main thread
-                title="",
-                image_urls=[],
-                video_urls=[],
-                post_extra_data={"Node": node, "Type": "measurement_result"},
-                min_fee_rate_nanos_per_kb=1000,
-                is_hidden=False,
-                in_tutorial=False
-            )
-            final_submit_resp = client.sign_and_submit_txn(final_resp)
-            final_txn_hash = final_submit_resp.get("TxnHashHex")
-            # Only log SUCCESS after the hash is available
-            logging.info(f"✅ SUCCESS: {node} - POST: {post_time:.2f}s, CONFIRM: {confirm_time:.2f}s, Total: {elapsed:.2f}s | Measurement comment TxnHash: {final_txn_hash}")
-            print(final_comment)
-            print(f"[DesoMonitor] Measurement comment submitted. Full TxnHash: {final_txn_hash}")
-            measurements[node].append((timestamp, {"post": post_time, "confirm": confirm_time, "total": elapsed, "comment_txn_hash": final_txn_hash}))
-            save_measurements()
-        except Exception as confirm_err:
-            elapsed = time.time() - start
-            logging.warning(f"⚠️ TIMEOUT: Reply txn not confirmed for {node} after {elapsed:.2f}s: {confirm_err}")
-            print(f"Reply txn not confirmed for {node}: {confirm_err}")
-            measurements[node].append((timestamp, {"post": post_time, "confirm": None, "total": elapsed}))
-            print(f"Reply txn not confirmed for {node}: {confirm_err}")
-            measurements[node].append((timestamp, None))
-            save_measurements()
-    except Exception as e:
-        elapsed = time.time() - start
-        logging.error(f"❌ ERROR: Failed to post to {node} after {elapsed:.2f}s: {e}")
-        print(f"Error posting to {node}: {e}")
-        measurements[node].append((datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"), None))
-        save_measurements()
-
-def scheduled_measurements(parent_post_hash):
-    logging.info(f"🚀 DesoMonitor: Starting scheduled measurements every {SCHEDULE_INTERVAL} seconds")
-    measurement_count = 0
-    while True:
-        measurement_count += 1
-        logging.info(f"📊 DesoMonitor: Starting measurement cycle #{measurement_count} for {len(NODES)} nodes")
-        for i, node in enumerate(NODES, 1):
-            logging.info(f"🔍 DesoMonitor: Processing node {i}/{len(NODES)}: {node}")
-            post_measurement(node, parent_post_hash)
-        next_run = datetime.datetime.utcnow() + datetime.timedelta(seconds=SCHEDULE_INTERVAL)
-        logging.info(f"💤 DesoMonitor: Measurement cycle #{measurement_count} complete. Next run at {next_run.strftime('%H:%M:%S UTC')}")
-        time.sleep(SCHEDULE_INTERVAL)
-
-def generate_daily_graph():
-    logging.info("📈 DesoMonitor: Generating daily performance graph...")
-    plt.figure(figsize=(8, 4))
-    for node in NODES:
-        times = [datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC") for t, e in measurements[node] if e is not None]
-        elapsed = [e for t, e in measurements[node] if e is not None]
-        plt.plot(times, elapsed, label=node)
-        logging.info(f"📊 Graph data for {node}: {len(elapsed)} measurements")
-    plt.xlabel("Time")
-    # Remove old daily_performance.png generation
-    # Only generate daily_performance_stacked.png (line+marker plot) and daily_performance_bar.png
-    pass
-
-def generate_gauge():
-    logging.info("🎯 DesoMonitor: Generating daily performance gauge...")
-    # Median per node
-    fig, ax = plt.subplots(figsize=(6, 3), subplot_kw={'projection': 'polar'})
-    for i, node in enumerate(NODES):
-        elapsed = [e for t, e in measurements[node] if e is not None]
-        if elapsed:
-            median = np.median(elapsed)
-            color = 'green' if median < 3 else 'yellow' if median < 20 else 'red'
-            ax.bar(i * np.pi / len(NODES), 1, width=np.pi / len(NODES), color=color, alpha=0.7)
-            ax.text(i * np.pi / len(NODES), 1.1, f"{node}\n{median:.2f}s", ha='center')
-            logging.info(f"🎯 Gauge for {node}: {median:.2f}s median ({color})")
-    ax.set_yticklabels([])
-    ax.set_xticklabels([])
-    ax.set_title("Median Node Response (Gauge)")
-    plt.savefig("daily_gauge.png")
-    plt.close()
-    logging.info("🎯 Daily performance gauge saved as 'daily_gauge.png'")
-
-def daily_post():
-    global PUBLIC_KEY, SEED_HEX
-    logging.info("📋 DesoMonitor: Starting daily summary post creation...")
-    generate_daily_graph(GRAPH_DAYS)
-    generate_gauge()
-    body = f"\U0001F4C8 Daily Node Performance Summary\n{POST_TAG}"
-    try:
-        save_measurements()
-        logging.info("\U0001F4E4 Posting daily summary to DeSo...")
-        client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=NODES[0])  # SEED_HEX from DESO_SEED_HEX
-        # Upload both graph images and get their URLs
-        image_url1 = client.upload_image("daily_performance_stacked.png", PUBLIC_KEY)
-        image_url2 = client.upload_image("daily_performance_bar.png", PUBLIC_KEY)
-        post_resp = client.submit_post(
-            updater_public_key_base58check=PUBLIC_KEY,
-            body=body,
-            parent_post_hash_hex=None,
-            title="",
-            image_urls=[image_url1, image_url2],
-            video_urls=[],
-            post_extra_data={"Node": NODES[0]},
-            min_fee_rate_nanos_per_kb=1000,
-            is_hidden=False,
-            in_tutorial=False
-        )
-        submit_resp = client.sign_and_submit_txn(post_resp)
-        parent_post_hash = submit_resp.get("TxnHashHex")
-        logging.info(f"✅ Daily summary posted successfully! PostHashHex: {parent_post_hash}")
-        print(f"Daily summary posted. PostHashHex: {parent_post_hash}")
-        return parent_post_hash
-    except Exception as e:
-        logging.error(f"❌ Error posting daily summary: {e}")
-        print(f"Error posting daily summary: {e}")
-        return None
-
-
-def post_measurement(node, parent_post_hash):
-    logging.info(f"🔄 DesoMonitor: Starting measurement post to {node}")
-    start = time.time()
-    try:
-        timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         
         logging.info(f"📡 Connecting to {node}...")
         client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX, node_url=node)  # SEED_HEX from DESO_SEED_HEX
@@ -401,8 +245,7 @@ def scheduled_measurements(parent_post_hash):
         print(f"[DesoMonitor] FATAL: Measurement thread crashed: {thread_exc}")
 
 def generate_daily_graph(graph_days=7):
-    # --- NEW: Parse measurement comments from blockchain for last graph_days ---
-    # (Legacy single-graph code removed; only stacked and bar graphs are produced)
+    # --- Parse measurement comments from blockchain for last graph_days (revert to working logic) ---
     import re
     import numpy as np
     client = DeSoDexClient(is_testnet=False, seed_phrase_or_hex=SEED_HEX)
@@ -422,12 +265,6 @@ def generate_daily_graph(graph_days=7):
                 daily_posts_by_date[date_str].append((t, post))
     selected_daily_posts = []
     today = datetime.datetime.utcnow().date()
-    # Dynamically determine expected number of measurement comments
-    nodes = NODES
-    schedule_interval = SCHEDULE_INTERVAL
-    per_node_per_day = int(24 * 60 * 60 / schedule_interval)
-    expected_comments = len(nodes) * per_node_per_day
-    comment_limit = int(expected_comments * 1.2)  # 20% buffer
     for i in range(graph_days):
         day = today - datetime.timedelta(days=i)
         date_str = day.strftime("%Y-%m-%d")
@@ -435,7 +272,7 @@ def generate_daily_graph(graph_days=7):
         for t, post in posts_for_day:
             daily_post_hash = post.get("PostHashHex")
             url_single = f"{client.node_url}/api/v0/get-single-post"
-            payload_single = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": comment_limit}
+            payload_single = {"PostHashHex": daily_post_hash, "CommentOffset": 0, "CommentLimit": 100}
             resp_single = requests.post(url_single, json=payload_single)
             resp_single.raise_for_status()
             comments = resp_single.json().get("PostFound", {}).get("Comments", [])
@@ -484,9 +321,13 @@ def generate_daily_graph(graph_days=7):
                         node_times[node].append((t, post_time))  # Keep for backward compatibility
                     if confirm_time is not None:
                         node_times_confirm[node].append((t, confirm_time))
-                    logging.info(f"📥 Measurement used for graph: node={node}, timestamp={timestamp}, POST={post_time}s, CONFIRM={confirm_time}s")
+                    logging.info(f"\U0001F4E5 Measurement used for graph: node={node}, timestamp={timestamp}, POST={post_time}s, CONFIRM={confirm_time}s")
             except Exception as ex:
                 logging.debug(f"⚠️ Skipping invalid measurement comment: {body} (error: {ex})")
+    # --- Sort measurement points by timestamp for each node ---
+    for node in NODES:
+        node_times_post[node].sort(key=lambda x: x[0])
+        node_times_confirm[node].sort(key=lambda x: x[0])
     # --- New: Stacked time series plots for POST and CONFIRM speeds ---
     import matplotlib.dates as mdates
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
@@ -496,7 +337,7 @@ def generate_daily_graph(graph_days=7):
         times = [t for t, e in node_times_post[node] if e is not None]
         elapsed = [e for t, e in node_times_post[node] if e is not None]
         node_name = node.replace('https://', '').replace('http://', '')
-        ax1.plot(times, elapsed, marker='o', markersize=4, linestyle='-', label=node_name, color=colors[i])
+        ax1.plot(times, elapsed, marker='o', linestyle='-', label=node_name, color=colors[i])
         logging.info(f"📊 POST graph data for {node}: {len(elapsed)} measurements")
     ax1.set_ylabel("POST Speed (seconds)", fontsize=12)
     ax1.set_title("DeSo Node POST Speed (Transaction Submission)", fontsize=14, fontweight='bold')
@@ -509,40 +350,7 @@ def generate_daily_graph(graph_days=7):
         times = [t for t, e in node_times_confirm[node] if e is not None]
         elapsed = [e for t, e in node_times_confirm[node] if e is not None]
         node_name = node.replace('https://', '').replace('http://', '')
-        ax2.plot(times, elapsed, marker='o', markersize=4, linestyle='-', label=node_name, color=colors[i])
-        logging.info(f"📊 CONFIRM graph data for {node}: {len(elapsed)} measurements")
-    ax2.set_ylabel("CONFIRMATION Speed (seconds)", fontsize=12)
-    ax2.set_title("DeSo Node CONFIRMATION Speed (Transaction Commitment - Full Nodes Only)", fontsize=14, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(fontsize=10, ncol=2, loc='upper left', bbox_to_anchor=(1.02, 1))
-    ax2.spines['top'].set_visible(False)
-    ax2.spines['right'].set_visible(False)
-    ax2.set_xlabel("Time (UTC)", fontsize=12)
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    import matplotlib.dates as mdates
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
-    colors = plt.cm.tab10(np.linspace(0, 1, len(NODES)))
-    # POST Speed (top) - line+marker plot
-    for i, node in enumerate(NODES):
-        times = [t for t, e in node_times_post[node] if e is not None]
-        elapsed = [e for t, e in node_times_post[node] if e is not None]
-        node_name = node.replace('https://', '').replace('http://', '')
-        ax1.plot(times, elapsed, marker='o', markersize=4, linestyle='-', label=node_name, color=colors[i])
-        logging.info(f"📊 POST graph data for {node}: {len(elapsed)} measurements")
-    ax1.set_ylabel("POST Speed (seconds)", fontsize=12)
-    ax1.set_title("DeSo Node POST Speed (Transaction Submission)", fontsize=14, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(fontsize=10, ncol=2, loc='upper left', bbox_to_anchor=(1.02, 1))
-    ax1.spines['top'].set_visible(False)
-    ax1.spines['right'].set_visible(False)
-    # CONFIRM Speed (bottom) - line+marker plot
-    for i, node in enumerate(NODES):
-        times = [t for t, e in node_times_confirm[node] if e is not None]
-        elapsed = [e for t, e in node_times_confirm[node] if e is not None]
-        node_name = node.replace('https://', '').replace('http://', '')
-        ax2.plot(times, elapsed, marker='o', markersize=4, linestyle='-', label=node_name, color=colors[i])
+        ax2.plot(times, elapsed, marker='o', linestyle='-', label=node_name, color=colors[i])
         logging.info(f"📊 CONFIRM graph data for {node}: {len(elapsed)} measurements")
     ax2.set_ylabel("CONFIRMATION Speed (seconds)", fontsize=12)
     ax2.set_title("DeSo Node CONFIRMATION Speed (Transaction Commitment - Full Nodes Only)", fontsize=14, fontweight='bold')
