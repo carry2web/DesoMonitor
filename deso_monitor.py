@@ -237,13 +237,9 @@ def generate_daily_graph():
         plt.plot(times, elapsed, label=node)
         logging.info(f"📊 Graph data for {node}: {len(elapsed)} measurements")
     plt.xlabel("Time")
-    plt.ylabel("Elapsed (sec)")
-    plt.title("Node Performance - Daily")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig("daily_performance.png")
-    plt.close()
-    logging.info("📈 Daily performance graph saved as 'daily_performance.png'")
+    # Remove old daily_performance.png generation
+    # Only generate daily_performance_stacked.png (line+marker plot) and daily_performance_bar.png
+    pass
 
 def generate_gauge():
     logging.info("🎯 DesoMonitor: Generating daily performance gauge...")
@@ -518,9 +514,9 @@ def generate_daily_graph(graph_days=7):
     ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig("daily_performance.png", dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    logging.info("📈 daily_performance.png saved as line+marker plot")
+    # Remove duplicate daily_performance.png generation
+    # Only generate daily_performance_stacked.png and daily_performance_bar.png
+    pass
 
     # --- Bar chart: POST vs CONFIRM Speed (Median) ---
     medians_post = []
@@ -688,13 +684,12 @@ def daily_post():
         # Upload all graph images and get their URLs
         image_url1 = client.upload_image("daily_performance_stacked.png", PUBLIC_KEY)
         image_url2 = client.upload_image("daily_performance_bar.png", PUBLIC_KEY)
-        image_url3 = client.upload_image("daily_performance.png", PUBLIC_KEY)
         post_resp = client.submit_post(
             updater_public_key_base58check=PUBLIC_KEY,
             body=body,
             parent_post_hash_hex=None,
             title="",
-            image_urls=[image_url1, image_url2, image_url3],
+            image_urls=[image_url1, image_url2],
             video_urls=[],
             post_extra_data={"Node": NODES[0]},
             min_fee_rate_nanos_per_kb=1000,
